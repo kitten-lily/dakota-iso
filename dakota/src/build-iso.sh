@@ -171,8 +171,21 @@ xorriso \
     -map "${ISO_ROOT}" / \
     -boot_image any platform_id=0xef \
     -boot_image any efi_path=EFI/efi.img \
+    -boot_image any part_like_isohybrid=on \
+    -boot_image isolinux partition_entry=gpt_basdat \
     -commit
 
 implantisomd5 "${OUTPUT_ISO}" 2>/dev/null || true
+
+# ── Verify hybrid MBR/GPT support ────────────────────────────────────────────
+# xorriso creates the hybrid layout directly. syslinux isohybrid cannot
+# post-process this ISO because it expects an ISOLINUX BIOS boot catalog; Dakota
+# uses systemd-boot with an EFI El Torito image. The xorriso options produce:
+#   - MBR entries for whole-image/ESP visibility on USB/removable media
+#   - GPT entry for the EFI System Partition image
+#   - El Torito EFI boot catalog for optical/VM firmware
+echo ">>> Hybrid MBR/GPT layout:"
+xorriso -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
+    grep -E '^(System area|ISO image size|MBR|GPT|Partition)' || true
 
 echo ">>> Done: ${OUTPUT_ISO} ($(du -sh "${OUTPUT_ISO}" | cut -f1))"
