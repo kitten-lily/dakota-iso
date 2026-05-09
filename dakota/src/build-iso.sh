@@ -16,6 +16,8 @@
 #   ISO9660 root:
 #     EFI/BOOT/BOOTX64.EFI      EFI fallback path (same binary) for Proxmox OVMF / Ventoy
 #     EFI/efi.img               (also referenced by El Torito)
+#     images/pxeboot/*          kernel/initramfs copies for loopback ISO boot tools
+#     boot/grub/loopback.cfg    metadata for Ventoy/GRUB-style loopback boot
 #     LiveOS/squashfs.img       squashfs of the full Dakota live rootfs
 #
 # Live boot flow:
@@ -147,6 +149,20 @@ mcopy -i "${ESP_IMG}" "${ESP_STAGING}/images/pxeboot/initrd.img"        ::/image
 mkdir -p "${ISO_ROOT}/EFI/BOOT"
 cp "${BOOT_EFI_SRC}" "${ISO_ROOT}/${BOOT_EFI_DEST}"
 echo ">>> EFI fallback: ${BOOT_EFI_DEST} added to ISO root"
+
+# ── ISO-root kernel/initramfs and loopback metadata ──────────────────────────
+# Ventoy and GRUB-style loopback boot tools expect kernel/initramfs paths in the
+# ISO filesystem itself, not only inside the El Torito ESP image.
+mkdir -p "${ISO_ROOT}/images/pxeboot" "${ISO_ROOT}/boot/grub"
+cp "${VMLINUZ}" "${ISO_ROOT}/images/pxeboot/vmlinuz"
+cp "${INITRD}"  "${ISO_ROOT}/images/pxeboot/initrd.img"
+cat > "${ISO_ROOT}/boot/grub/loopback.cfg" << EOF
+menuentry "Dakota Live" {
+    linux /images/pxeboot/vmlinuz root=live:CDLABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 quiet console=ttyS0,115200n8 console=ttyAMA0,115200n8 rd.dakota.isofile=\${iso_path}
+    initrd /images/pxeboot/initrd.img
+}
+EOF
+echo ">>> Loopback boot metadata added to ISO root"
 
 # ── Place the pre-built squashfs ─────────────────────────────────────────────
 echo ">>> Copying squashfs..."
