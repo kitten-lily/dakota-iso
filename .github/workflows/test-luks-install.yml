@@ -104,7 +104,7 @@ jobs:
         id: luks_test
         run: |
           START=$(date +%s)
-          just luks-test-qemu dakota
+          sudo $(command -v just) luks-test-qemu dakota
           echo "duration=$(( $(date +%s) - START ))" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
