@@ -377,8 +377,26 @@ This is an internal libisofs state message during hybrid layout assembly. The fi
 has a correct hybrid layout (MBR type 0xcd + GPT EFI System Partition). Ignore it.
 
 **xorriso installed via brew** (as of 2026-05-12): `which xorriso` → `/home/linuxbrew/.linuxbrew/bin/xorriso` (v1.5.8.pl01). `mtools` also installed via brew.
-**buildah NOT available on the host** (immutable OS, can't `sudo dnf install` non-interactively). See workaround below.
-**QEMU available via linuxbrew**: `/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64` (v11.0.0). OVMF at `/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd`. Boot test:
+**buildah NOT available on the host** (immutable OS, can't `sudo dnf install` non-interactively). Working solution: buildah wrapper at `~/.local/bin/buildah` using a containerized buildah:
+```bash
+# One-time setup:
+cat > /tmp/Containerfile.buildah << 'EOF'
+FROM registry.fedoraproject.org/fedora-toolbox:42
+RUN dnf install -y buildah && dnf clean all
+EOF
+podman build -t localhost/buildah-tool:latest -f /tmp/Containerfile.buildah /tmp/
+cat > ~/.local/bin/buildah << 'WRAPPER'
+#!/bin/bash
+exec podman run --rm --privileged --net=host --security-opt label=disable \
+    -v "$HOME/.local/share/containers:/var/lib/containers:rw" \
+    -v "/tmp:/tmp:rw" -v "/var/tmp:/var/tmp:rw" \
+    ${PWD:+-v "$PWD:$PWD:rw"} \
+    localhost/buildah-tool:latest buildah "$@"
+WRAPPER
+chmod +x ~/.local/bin/buildah
+```
+**mksquashfs installed via brew** (as of 2026-05-13): `brew install squashfs`. Binary at `/home/linuxbrew/.linuxbrew/bin/mksquashfs`.
+**QEMU available via linuxbrew**: `/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64` (v11.0.0). OVMF code at `/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd`. No `edk2-x86_64-vars.fd` in brew — create a zeroed 256KB VARS file: `dd if=/dev/zero bs=1k count=256 of=/tmp/ovmf-vars.fd`. QEMU paths are added to the justfile `boot-iso-serial` / `luks-*` recipes. Boot test:
 ```bash
 QEMU=/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64
 OVMF=/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd
@@ -466,3 +484,61 @@ creates a conflicting `db.sql` at first boot.
 **fisherman fails with "cannot execute binary file"**
 Caused by a corrupted Entrypoint in the squashed image. Use `buildah commit --squash`
 not `podman create --entrypoint /bin/sh && podman commit`.
+
+**Install fails: `open /var/tmp/oci-cache/index.json: no such file or directory`**
+This is a fisherman dev channel regression in the overlay storage code path (introduced
+after the continuous-dev release ~2026-05). When composefs+btrfs is used, fisherman exports
+the OCI to scratch, but bootc inside the container cannot see it via the bind mount.
+Fix: use `installer_channel=stable` (the default). Do NOT use `installer_channel=dev` in
+CI or production builds until tuna-os/fisherman#38 is resolved.
+The `build-iso.yml` CI workflow must stay on `installer_channel=stable`.
+
+**Host sudo unavailable in automated/pi sessions**
+`sudo -v` in the user's terminal does NOT carry over to pi bash sessions (different TTY).
+Never rely on host sudo in automated workflows. The justfile's rootless path works without
+sudo. The QEMU VM's `liveuser` has NOPASSWD sudo — use that for install tests inside the VM.
+
+**Local QEMU install test (end-to-end)**
+```bash
+# 1. Build ISO (no sudo needed)
+just iso-sd-boot dakota
+
+# 2. Create target disk
+qemu-img create -f raw /tmp/dakota-install-disk.img 50G
+
+# 3. Boot with ISO + disk (use FULL paths, not ~/)
+QEMU=/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64
+OVMF=/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd
+VARS=$(mktemp /tmp/OVMF_VARS.XXXXXX.fd); dd if=/dev/zero bs=1k count=256 of=$VARS
+$QEMU -machine q35 -m 4096 -accel kvm -cpu host -smp 4 \
+  -drive if=pflash,format=raw,readonly=on,file=$OVMF \
+  -drive if=pflash,format=raw,file=$VARS \
+  -drive if=none,id=live,file=/var/home/jorge/src/dakota-iso/output/dakota-live.iso,media=cdrom,format=raw,readonly=on \
+  -device virtio-scsi-pci,id=scsi -device scsi-cd,drive=live \
+  -drive if=none,id=target,file=/tmp/dakota-install-disk.img,format=raw \
+  -device virtio-blk-pci,drive=target \
+  -net nic,model=virtio -net user,hostfwd=tcp::2222-:22 \
+  -serial file:/tmp/boot-serial.log -display none -no-reboot &
+
+# 4. Wait for live env
+until grep -q DAKOTA_LIVE_READY /tmp/boot-serial.log 2>/dev/null; do sleep 5; done
+ssh-keygen -R '[localhost]:2222' 2>/dev/null
+
+# 5. Write recipe and run install (liveuser has NOPASSWD sudo)
+sshpass -p 'live' ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no \
+  -o PreferredAuthentications=password -p 2222 liveuser@localhost \
+  'cat > /home/liveuser/recipe.json << EOF
+{"disk":"/dev/vda","filesystem":"btrfs","image":"containers-storage:ghcr.io/projectbluefin/dakota:latest","composeFsBackend":true,"bootloader":"systemd","hostname":"test","encryption":null,"flatpaks":[]}
+EOF
+setsid bash -c "sudo /usr/local/bin/fisherman /home/liveuser/recipe.json > /home/liveuser/install.log 2>&1; echo EXIT:\$? >> /home/liveuser/install.log" </dev/null >/dev/null 2>&1 &'
+
+# 6. Poll for completion (every 15s, not 120s)
+while ! sshpass -p live ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no \
+  -o PreferredAuthentications=password -p 2222 liveuser@localhost \
+  'grep -q EXIT: /home/liveuser/install.log 2>/dev/null' 2>/dev/null; do
+  sleep 15; echo -n "."
+done
+sshpass -p live ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no \
+  -o PreferredAuthentications=password -p 2222 liveuser@localhost \
+  'tail -5 /home/liveuser/install.log'
+```
