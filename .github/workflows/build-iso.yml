@@ -67,7 +67,7 @@ jobs:
           # The squash-to-single-layer approach reduces VFS import from ~720GB to ~6GB,
           # so no XFS staging is needed. Total peak disk usage: ~40GB.
           sudo mkdir -p /var/iso-build
-          sudo $(command -v just) installer_channel=dev output_dir=/var/iso-build iso-sd-boot ${{ matrix.target }}
+          sudo $(command -v just) installer_channel=stable output_dir=/var/iso-build iso-sd-boot ${{ matrix.target }}
           # Copy final ISO to workspace for artifact/upload steps
           mkdir -p output
           sudo cp /var/iso-build/*.iso output/ 2>/dev/null || true
