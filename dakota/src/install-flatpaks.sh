@@ -38,11 +38,8 @@ flatpak remote-add --system --if-not-exists flathub \
 # INSTALLER_CHANNEL controls which release tag to pull from:
 #   stable (default) → continuous   (latest stable build from main/prod)
 #   dev              → continuous-dev (latest dev build, tracks dev branch)
-RELEASE_TAG="v2.4.0"
+RELEASE_TAG="continuous"
 FLATPAK_FILENAME="org.bootcinstaller.Installer.flatpak"
-# NOTE: Do NOT change stable back to "continuous" — that rolling release was
-# silently updated 2026-05-09 with v2.5.0 which contains the broken overlay
-# storage code path. Pinned to v2.4.0 until tuna-os/fisherman#38 is resolved.
 if [[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]]; then
     RELEASE_TAG="continuous-dev"
     FLATPAK_FILENAME="org.bootcinstaller.Installer.Devel.flatpak"
