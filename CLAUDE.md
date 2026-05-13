@@ -376,7 +376,42 @@ libisofs: WARNING : Prevented partition type 0xEE in MBR without GPT
 This is an internal libisofs state message during hybrid layout assembly. The final ISO
 has a correct hybrid layout (MBR type 0xcd + GPT EFI System Partition). Ignore it.
 
-**xorriso not installed on the host machine.** Test `build-iso.sh` in the Debian container:
+**xorriso installed via brew** (as of 2026-05-12): `which xorriso` → `/home/linuxbrew/.linuxbrew/bin/xorriso` (v1.5.8.pl01). `mtools` also installed via brew.
+**buildah NOT available on the host** (immutable OS, can't `sudo dnf install` non-interactively). See workaround below.
+**QEMU available via linuxbrew**: `/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64` (v11.0.0). OVMF at `/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd`. Boot test:
+```bash
+QEMU=/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64
+OVMF=/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd
+timeout 20 $QEMU -machine q35 -m 2048 -accel kvm -cpu host \
+    -drive if=pflash,format=raw,readonly=on,file=$OVMF \
+    -drive if=none,id=iso,file=output/dakota-live.iso,media=cdrom,readonly=on,format=raw \
+    -device virtio-scsi-pci -device scsi-cd,drive=iso \
+    -serial stdio -display none -no-reboot 2>&1
+# Look for: BdsDxe loading + systemd-boot menu + kernel messages
+```
+
+**buildah workaround for partial ISO build testing** (extracts real kernel + EFI from already-built container):
+```bash
+podman unshare bash -c "
+    MOUNT=\$(podman image mount localhost/dakota-installer)
+    tar -C \$MOUNT -cf output/real-boot-files.tar ./usr/lib/modules ./usr/lib/systemd/boot/efi
+    podman image unmount localhost/dakota-installer
+"
+# Then test build-iso.sh with real boot files + placeholder squashfs:
+dd if=/dev/zero bs=1M count=1 > output/test.sfs
+bash dakota/src/build-iso.sh output/real-boot-files.tar output/test.sfs output/test.iso
+```
+This proves the GPT layout is correct end-to-end without a full build.
+
+**Inspect remote ISO GPT without downloading (4KB range request):**
+```bash
+curl --range 0-2047 https://projectbluefin.dev/dakota-live-latest.iso -o /tmp/head.bin
+fdisk -l /tmp/head.bin   # gpt=correct, dos=broken
+# Check MBR type byte: 0xEE=protective(good), 0x00=hybrid(bad)
+printf "MBR type: 0x%02x\n" "$(od -An -tx1 -j450 -N1 /tmp/head.bin | tr -d ' ')"
+```
+
+**Test `build-iso.sh` in the Debian container** (if brew tools aren't available):
 ```bash
 podman run --rm -v /var/tmp/test:/work \
     -v ./dakota/src/build-iso.sh:/build-iso.sh:ro \
