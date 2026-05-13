@@ -396,16 +396,32 @@ WRAPPER
 chmod +x ~/.local/bin/buildah
 ```
 **mksquashfs installed via brew** (as of 2026-05-13): `brew install squashfs`. Binary at `/home/linuxbrew/.linuxbrew/bin/mksquashfs`.
-**QEMU available via linuxbrew**: `/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64` (v11.0.0). OVMF code at `/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd`. No `edk2-x86_64-vars.fd` in brew — create a zeroed 256KB VARS file: `dd if=/dev/zero bs=1k count=256 of=/tmp/ovmf-vars.fd`. QEMU paths are added to the justfile `boot-iso-serial` / `luks-*` recipes. Boot test:
+**QEMU available via linuxbrew**: `/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64` (v11.0.0). OVMF code at `/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd`. No `edk2-x86_64-vars.fd` in brew — create a zeroed 256KB VARS file: `dd if=/dev/zero bs=1k count=256 of=/tmp/ovmf-vars.fd`. QEMU paths are added to the justfile `boot-iso-serial` / `luks-*` recipes.
+
+**⛔ Interactive QEMU testing rules (agent-enforced):**
+- **Always use `-display gtk,zoom-to-fit=on`** for interactive sessions — never `-display none` unless running headless CI.
+- **Always create a 50GB install disk** before launching QEMU — do this without being asked.
+- **Pass the ISO path directly** — never create symlinks in `output/` to satisfy the Justfile. Just run QEMU.
+- ISOs are typically in `~/Downloads/` (e.g. `dakota-live-latest.iso`), not `output/`.
+
+**Interactive boot + install test (standard command):**
 ```bash
 QEMU=/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64
 OVMF=/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd
-timeout 20 $QEMU -machine q35 -m 2048 -accel kvm -cpu host \
+VARS=$(mktemp /tmp/OVMF_VARS.XXXXXX.fd); dd if=/dev/zero bs=1k count=256 of=$VARS 2>/dev/null
+qemu-img create -f raw /tmp/dakota-install-disk.img 50G
+$QEMU -machine q35 -m 4096 -accel kvm -cpu host -smp 4 \
     -drive if=pflash,format=raw,readonly=on,file=$OVMF \
-    -drive if=none,id=iso,file=output/dakota-live.iso,media=cdrom,readonly=on,format=raw \
-    -device virtio-scsi-pci -device scsi-cd,drive=iso \
-    -serial stdio -display none -no-reboot 2>&1
-# Look for: BdsDxe loading + systemd-boot menu + kernel messages
+    -drive if=pflash,format=raw,file=$VARS \
+    -drive if=none,id=live-disk,file=~/Downloads/dakota-live-latest.iso,media=cdrom,format=raw,readonly=on \
+    -device virtio-scsi-pci,id=scsi -device scsi-cd,drive=live-disk \
+    -drive if=none,id=target,file=/tmp/dakota-install-disk.img,format=raw \
+    -device virtio-blk-pci,drive=target \
+    -net nic,model=virtio -net user,hostfwd=tcp::2222-:22 \
+    -display gtk,zoom-to-fit=on \
+    -serial file:/tmp/dakota-serial.log &
+# Inside VM: ISO boots as cdrom, install target = /dev/vda
+# Watch for ready: tail -f /tmp/dakota-serial.log | grep DAKOTA_LIVE_READY
 ```
 
 **buildah workaround for partial ISO build testing** (extracts real kernel + EFI from already-built container):
@@ -518,7 +534,9 @@ $QEMU -machine q35 -m 4096 -accel kvm -cpu host -smp 4 \
   -drive if=none,id=target,file=/tmp/dakota-install-disk.img,format=raw \
   -device virtio-blk-pci,drive=target \
   -net nic,model=virtio -net user,hostfwd=tcp::2222-:22 \
-  -serial file:/tmp/boot-serial.log -display none -no-reboot &
+  -serial file:/tmp/boot-serial.log \
+  -display gtk,zoom-to-fit=on &
+# Note: pass the real ISO path directly — do NOT create a symlink in output/
 
 # 4. Wait for live env
 until grep -q DAKOTA_LIVE_READY /tmp/boot-serial.log 2>/dev/null; do sleep 5; done
