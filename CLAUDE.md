@@ -396,32 +396,36 @@ WRAPPER
 chmod +x ~/.local/bin/buildah
 ```
 **mksquashfs installed via brew** (as of 2026-05-13): `brew install squashfs`. Binary at `/home/linuxbrew/.linuxbrew/bin/mksquashfs`.
-**QEMU available via linuxbrew**: `/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64` (v11.0.0). OVMF code at `/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd`. No `edk2-x86_64-vars.fd` in brew — create a zeroed 256KB VARS file: `dd if=/dev/zero bs=1k count=256 of=/tmp/ovmf-vars.fd`. QEMU paths are added to the justfile `boot-iso-serial` / `luks-*` recipes.
+**QEMU available via linuxbrew**: `/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64` (v11.0.0). OVMF code at `/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd`. No `edk2-x86_64-vars.fd` in brew — create a zeroed 256KB VARS file: `dd if=/dev/zero bs=1k count=256 of=/var/tmp/ovmf-vars.fd`. QEMU paths are added to the justfile `boot-iso-serial` / `luks-*` recipes.
 
 **⛔ Interactive QEMU testing rules (agent-enforced):**
 - **Always use `-display gtk,zoom-to-fit=on`** for interactive sessions — never `-display none` unless running headless CI.
 - **Always create a 50GB install disk** before launching QEMU — do this without being asked.
 - **Pass the ISO path directly** — never create symlinks in `output/` to satisfy the Justfile. Just run QEMU.
 - ISOs are typically in `~/Downloads/` (e.g. `dakota-live-latest.iso`), not `output/`.
+- **Always use `/var/tmp/` for disk images and OVMF VARS** — never `/tmp`. `/tmp` is a 16GB tmpfs; two 50GB sparse images fill it instantly, pausing the VM.
 
 **Interactive boot + install test (standard command):**
 ```bash
 QEMU=/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64
 OVMF=/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd
-VARS=$(mktemp /tmp/OVMF_VARS.XXXXXX.fd); dd if=/dev/zero bs=1k count=256 of=$VARS 2>/dev/null
-qemu-img create -f raw /tmp/dakota-install-disk.img 50G
+VARS=/var/tmp/OVMF_VARS.fd; dd if=/dev/zero bs=1k count=256 of=$VARS 2>/dev/null
+qemu-img create -f raw /var/tmp/dakota-install-disk.img 50G
+VARS=/var/tmp/OVMF_VARS.fd; dd if=/dev/zero bs=1k count=256 of=$VARS
 $QEMU -machine q35 -m 4096 -accel kvm -cpu host -smp 4 \
     -drive if=pflash,format=raw,readonly=on,file=$OVMF \
     -drive if=pflash,format=raw,file=$VARS \
     -drive if=none,id=live-disk,file=~/Downloads/dakota-live-latest.iso,media=cdrom,format=raw,readonly=on \
     -device virtio-scsi-pci,id=scsi -device scsi-cd,drive=live-disk \
-    -drive if=none,id=target,file=/tmp/dakota-install-disk.img,format=raw \
+    -drive if=none,id=target,file=/var/tmp/dakota-install-disk.img,format=raw \
     -device virtio-blk-pci,drive=target \
     -net nic,model=virtio -net user,hostfwd=tcp::2222-:22 \
+    -device usb-ehci -device usb-tablet \
     -display gtk,zoom-to-fit=on \
-    -serial file:/tmp/dakota-serial.log &
+    -serial file:/var/tmp/dakota-serial.log &
 # Inside VM: ISO boots as cdrom, install target = /dev/vda
 # Watch for ready: tail -f /tmp/dakota-serial.log | grep DAKOTA_LIVE_READY
+# usb-tablet = absolute pointing device, required for mouse to work in GTK window
 ```
 
 **buildah workaround for partial ISO build testing** (extracts real kernel + EFI from already-built container):
@@ -439,10 +443,10 @@ This proves the GPT layout is correct end-to-end without a full build.
 
 **Inspect remote ISO GPT without downloading (4KB range request):**
 ```bash
-curl --range 0-2047 https://projectbluefin.dev/dakota-live-latest.iso -o /tmp/head.bin
-fdisk -l /tmp/head.bin   # gpt=correct, dos=broken
+curl --range 0-2047 https://projectbluefin.dev/dakota-live-latest.iso -o /var/tmp/head.bin
+fdisk -l /var/tmp/head.bin   # gpt=correct, dos=broken
 # Check MBR type byte: 0xEE=protective(good), 0x00=hybrid(bad)
-printf "MBR type: 0x%02x\n" "$(od -An -tx1 -j450 -N1 /tmp/head.bin | tr -d ' ')"
+printf "MBR type: 0x%02x\n" "$(od -An -tx1 -j450 -N1 /var/tmp/head.bin | tr -d ' ')"
 ```
 
 **Test `build-iso.sh` in the Debian container** (if brew tools aren't available):
@@ -491,7 +495,7 @@ Harmless — openh264 requires user namespaces not available inside Podman build
 
 **`DAKOTA_LIVE_READY` not seen in serial log (CI or local)**
 Some dev channel builds don't write the marker to ttyS0. CI falls back to SSH
-connectivity check. If both fail after 5 minutes, check `tail -50 /tmp/serial.log`.
+connectivity check. If both fail after 5 minutes, check `tail -50 /var/tmp/serial.log`.
 
 **VFS containers-storage not found at boot**
 Ensure `driver = "vfs"` is set in `/etc/containers/storage.conf`. Overlay driver
@@ -520,26 +524,28 @@ sudo. The QEMU VM's `liveuser` has NOPASSWD sudo — use that for install tests 
 just iso-sd-boot dakota
 
 # 2. Create target disk
-qemu-img create -f raw /tmp/dakota-install-disk.img 50G
+qemu-img create -f raw /var/tmp/dakota-install-disk.img 50G
 
 # 3. Boot with ISO + disk (use FULL paths, not ~/)
 QEMU=/home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64
 OVMF=/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd
-VARS=$(mktemp /tmp/OVMF_VARS.XXXXXX.fd); dd if=/dev/zero bs=1k count=256 of=$VARS
+VARS=/var/tmp/OVMF_VARS.fd; dd if=/dev/zero bs=1k count=256 of=$VARS
 $QEMU -machine q35 -m 4096 -accel kvm -cpu host -smp 4 \
   -drive if=pflash,format=raw,readonly=on,file=$OVMF \
   -drive if=pflash,format=raw,file=$VARS \
   -drive if=none,id=live,file=/var/home/jorge/src/dakota-iso/output/dakota-live.iso,media=cdrom,format=raw,readonly=on \
   -device virtio-scsi-pci,id=scsi -device scsi-cd,drive=live \
-  -drive if=none,id=target,file=/tmp/dakota-install-disk.img,format=raw \
+  -drive if=none,id=target,file=/var/tmp/dakota-install-disk.img,format=raw \
   -device virtio-blk-pci,drive=target \
   -net nic,model=virtio -net user,hostfwd=tcp::2222-:22 \
-  -serial file:/tmp/boot-serial.log \
+  -serial file:/var/tmp/boot-serial.log \
+  -device usb-ehci -device usb-tablet \
   -display gtk,zoom-to-fit=on &
 # Note: pass the real ISO path directly — do NOT create a symlink in output/
+# usb-tablet required for mouse to work in GTK window
 
 # 4. Wait for live env
-until grep -q DAKOTA_LIVE_READY /tmp/boot-serial.log 2>/dev/null; do sleep 5; done
+until grep -q DAKOTA_LIVE_READY /var/tmp/boot-serial.log 2>/dev/null; do sleep 5; done
 ssh-keygen -R '[localhost]:2222' 2>/dev/null
 
 # 5. Write recipe and run install (liveuser has NOPASSWD sudo)
