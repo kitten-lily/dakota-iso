@@ -60,6 +60,7 @@ ARG INSTALLER_CHANNEL=stable
 ENV INSTALLER_CHANNEL=${INSTALLER_CHANNEL}
 
 # DEBUG=1 builds a minimal debug ISO (installer only, SSH enabled).
+# Cache-bust: 1778705723
 # Declared before the flatpak layer so install-flatpaks.sh can skip Flathub
 # apps in debug mode.  Switching debug=0↔1 busts the flatpak cache, but
 # debug builds are fast (installer-only) and production builds are cached
