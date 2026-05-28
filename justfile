@@ -891,8 +891,21 @@ luks-boot-qemu-live target:
     sudo rm -f "{{luks-qemu-monitor-live}}" "{{luks-qemu-serial-live}}"
 
     echo "Booting live ISO: $ISO"
-    "$QEMU" \
-        -machine q35 -cpu host -m 8192 -smp 4 -accel kvm \
+    # KVM access: try direct, then sudo, then fall back to TCG
+    QEMU_ACCEL="-accel kvm"
+    QEMU_PREFIX=""
+    if ! test -r /dev/kvm 2>/dev/null; then
+        if sudo test -r /dev/kvm 2>/dev/null; then
+            echo "Using sudo for KVM access"
+            QEMU_PREFIX="sudo"
+        else
+            echo "KVM not available, falling back to TCG emulation (slower)"
+            QEMU_ACCEL="-accel tcg,thread=multi"
+            QEMU_PREFIX=""
+        fi
+    fi
+    $QEMU_PREFIX "$QEMU" \
+        -machine q35 -cpu host -m 8192 -smp 4 $QEMU_ACCEL \
         -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
         -drive "if=pflash,format=raw,file=${OVMF_VARS}" \
         -drive "if=none,id=iso,file=${ISO},media=cdrom,readonly=on,format=raw" \
@@ -997,8 +1010,21 @@ luks-boot-qemu-installed target:
     sudo rm -f "{{luks-qemu-monitor-installed}}" "{{luks-qemu-serial-installed}}"
 
     echo "Booting installed disk: {{luks-qemu-disk}}"
-    "$QEMU" \
-        -machine q35 -cpu host -m 8192 -smp 4 -accel kvm \
+    # KVM access: try direct, then sudo, then fall back to TCG
+    QEMU_ACCEL="-accel kvm"
+    QEMU_PREFIX=""
+    if ! test -r /dev/kvm 2>/dev/null; then
+        if sudo test -r /dev/kvm 2>/dev/null; then
+            echo "Using sudo for KVM access"
+            QEMU_PREFIX="sudo"
+        else
+            echo "KVM not available, falling back to TCG emulation (slower)"
+            QEMU_ACCEL="-accel tcg,thread=multi"
+            QEMU_PREFIX=""
+        fi
+    fi
+    $QEMU_PREFIX "$QEMU" \
+        -machine q35 -cpu host -m 8192 -smp 4 $QEMU_ACCEL \
         -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
         -drive "if=pflash,format=raw,file=${OVMF_VARS}" \
         -drive "if=none,id=disk,file={{luks-qemu-disk}},format=qcow2" \
