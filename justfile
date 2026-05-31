@@ -1060,3 +1060,7 @@ luks-unlock-qemu target:
         key=$(echo "$label" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
         bash "dakota/src/show-screenshot.sh" "/tmp/luks-screenshot-${key}.ppm" "$label" || true
     done
+
+# Run Python unit tests.
+test:
+    python3 -m unittest discover -s tests
