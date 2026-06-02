@@ -297,6 +297,21 @@ class TestLuksUnlock(unittest.TestCase):
         # Should not copy since brightness < threshold
         mock_copy.assert_not_called()
 
+    @patch("luks_unlock.qemu_screendump")
+    @patch("time.sleep")
+    @patch("shutil.copy2")
+    def test_run_wait_live_timeout_with_bright_frame(self, mock_copy, mock_sleep, mock_screendump):
+        # Screen is bright but keeps changing hash
+        mock_screendump.side_effect = [
+            (2.0, 'b'),
+            (2.0, 'c'),
+            (2.0, 'd')
+        ]
+        with patch("time.time", side_effect=[0, 100, 200, 301]):
+            luks_unlock.run_wait_live("/tmp/sock", "/tmp/screenshot.ppm")
+        # Should copy the bright frames
+        self.assertTrue(mock_copy.called)
+
 
 if __name__ == "__main__":
     unittest.main()

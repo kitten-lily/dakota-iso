@@ -477,7 +477,10 @@ def run_wait_live(monitor_sock: str, screenshot_path: str):
 
         time.sleep(POLL_INTERVAL)
 
-    print("[luks-unlock] WARNING: wait-live timed out or screen never stabilized. Using last captured screen.", file=sys.stderr)
+    if prev_hash:
+        print("[luks-unlock] WARNING: wait-live timed out — screen never stabilized. Using last captured bright frame.", file=sys.stderr)
+    else:
+        print("[luks-unlock] WARNING: wait-live timed out — screen never reached brightness threshold. No screenshot captured.", file=sys.stderr)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
