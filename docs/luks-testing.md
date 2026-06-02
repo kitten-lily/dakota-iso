@@ -165,3 +165,9 @@ sshpass -p live ssh ... 'setsid bash -c "sudo fisherman recipe.json > /tmp/insta
 
 Polling fisherman completion at 120s intervals causes 2-minute detection gaps.
 Poll at 15s — fisherman takes 5–15 min but the completion check is cheap.
+
+### Live boot screenshot timing in QEMU (2026-06-02)
+
+The live boot screenshot was captured immediately after SSH or the serial ready check succeeded. However, SSH and systemd units start much earlier than GDM autologin and the installer GUI. Capturing the screenshot immediately resulted in a black screen.
+
+Fix: Added `wait-live` mode to `luks-unlock.py` which monitors screen brightness and hash stability. It waits up to 5 minutes for the screen to become bright (brightness >= 1.5) and stable before capturing the PPM.

@@ -256,6 +256,47 @@ class TestLuksUnlock(unittest.TestCase):
             mock_run_qemu.assert_called_once_with("/tmp/sock", "pass123", "/tmp/serial.log")
             mock_exit.assert_not_called()
 
+    @patch("sys.exit")
+    def test_main_wait_live_insufficient_args(self, mock_exit):
+        mock_exit.side_effect = SystemExit(1)
+        with patch("sys.argv", ["luks-unlock.py", "wait-live", "/tmp/sock"]):
+            with self.assertRaises(SystemExit):
+                luks_unlock.main()
+            mock_exit.assert_called_once_with(1)
+
+    @patch("sys.exit")
+    @patch("luks_unlock.run_wait_live")
+    def test_main_wait_live_success(self, mock_run_wait_live, mock_exit):
+        with patch("sys.argv", ["luks-unlock.py", "wait-live", "/tmp/sock", "/tmp/screenshot.ppm"]):
+            luks_unlock.main()
+            mock_run_wait_live.assert_called_once_with("/tmp/sock", "/tmp/screenshot.ppm")
+            mock_exit.assert_not_called()
+
+    @patch("luks_unlock.qemu_screendump")
+    @patch("time.sleep")
+    @patch("shutil.copy2")
+    def test_run_wait_live_success(self, mock_copy, mock_sleep, mock_screendump):
+        mock_screendump.side_effect = [
+            (0.1, 'a'),
+            (2.0, 'b'),
+            (2.0, 'b'),
+            (2.0, 'b')
+        ]
+        luks_unlock.run_wait_live("/tmp/sock", "/tmp/screenshot.ppm")
+        self.assertEqual(mock_screendump.call_count, 4)
+        mock_copy.assert_called_with("/tmp/luks-live-boot-snap.ppm", "/tmp/screenshot.ppm")
+
+    @patch("luks_unlock.qemu_screendump")
+    @patch("time.sleep")
+    @patch("shutil.copy2")
+    def test_run_wait_live_timeout(self, mock_copy, mock_sleep, mock_screendump):
+        # Always dark, or never stable
+        mock_screendump.return_value = (0.1, 'a')
+        with patch("time.time", side_effect=[0, 100, 200, 301]):
+            luks_unlock.run_wait_live("/tmp/sock", "/tmp/screenshot.ppm")
+        # Should not copy since brightness < threshold
+        mock_copy.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
