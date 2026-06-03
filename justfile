@@ -962,10 +962,20 @@ luks-install-qemu target:
     SSH="sshpass -p live ssh $SSH_OPTS liveuser@127.0.0.1 -p {{luks-qemu-ssh-port}}"
     SCP="sshpass -p live scp $SSH_OPTS -P {{luks-qemu-ssh-port}}"
 
+    # Use local containers-storage if the image is cached there (offline install);
+    # otherwise fall back to a network pull via docker://.
+    if $SSH "sudo podman image exists '${PAYLOAD_IMAGE}' 2>/dev/null"; then
+        INSTALL_IMAGE="containers-storage:${PAYLOAD_IMAGE}"
+        echo "Image found in local containers-storage — using offline install."
+    else
+        INSTALL_IMAGE="docker://${PAYLOAD_IMAGE}"
+        echo "Image not in local store — fisherman will pull from network."
+    fi
+
     RECIPE_TMP=$(mktemp /tmp/luks-recipe-XXXXXX.json)
     trap "rm -f '${RECIPE_TMP}'" EXIT
-    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "containers-storage:'"${PAYLOAD_IMAGE}"'",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-luks-test",\n  "encryption": {"type": "luks-passphrase", "passphrase": "%s"},\n  "flatpaks": []\n}\n' \
-        "${DISK}" "${PASSPHRASE}" > "${RECIPE_TMP}"
+    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "%s",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-luks-test",\n  "encryption": {"type": "luks-passphrase", "passphrase": "%s"},\n  "flatpaks": []\n}\n' \
+        "${DISK}" "${INSTALL_IMAGE}" "${PASSPHRASE}" > "${RECIPE_TMP}"
     $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/luks-recipe.json
     echo "Uploaded recipe — running fisherman (takes several minutes)..."
     $SSH 'sudo /usr/local/bin/fisherman /tmp/luks-recipe.json'
