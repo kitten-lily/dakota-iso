@@ -14,13 +14,14 @@ Agent entry point for `projectbluefin/dakota-iso`. Load only the skill(s) that m
 | Know when to stop and ask a human | [`docs/skills/human-gates.md`](skills/human-gates.md) |
 | **Building ISOs** | |
 | Build ISOs locally, disk space, BTRFS/XFS quirks | [`docs/build.md`](build.md) |
+| Unified nvidia ISO — size, compression, nvidia_imgref | [`docs/build.md`](build.md) |
 | Add or modify variants (`payload_ref` pattern) | [`docs/variants.md`](variants.md) |
 | **Architecture** | |
 | Two-container pipeline, boot flow, squashfs, VFS storage | [`docs/architecture.md`](architecture.md) |
 | GPT layout, El Torito, systemd-boot, dmsquash-live | [`docs/architecture.md`](architecture.md) |
 | **CI/CD** | |
-| `build-iso.yml`, smoke test, R2 uploads | [`docs/ci.md`](ci.md) |
-| LUKS E2E test (local QEMU, libvirt, CI-equivalent) | [`docs/luks-testing.md`](luks-testing.md) |
+| `build-iso.yml`, smoke test, R2 uploads, unified ISO pipeline | [`docs/ci.md`](ci.md) |
+| LUKS E2E test (local QEMU, libvirt, CI-equivalent) + installed-disk boot | [`docs/luks-testing.md`](luks-testing.md) |
 | **R2 / Release** | |
 | Promoting ISOs to production, rclone, named releases | [`docs/r2-promotion.md`](r2-promotion.md) |
 | **Factory / org** | |

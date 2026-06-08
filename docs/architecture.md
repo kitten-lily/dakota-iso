@@ -267,6 +267,18 @@ Drop-in path: `/etc/systemd/system/bluefin-remove-installer.service.d/live-skip.
 ConditionPathExists=!/etc/bootc-installer/live-iso-mode
 ```
 
+### QEMU installed-disk boot: use qcow2, no cdrom (2026-06)
+
+When verifying an installed system in QEMU (not the live ISO), two things are
+required for OVMF to auto-discover the virtio-blk disk without EFI NVRAM entries:
+
+- Install disk must be **qcow2** format (convert raw → qcow2 with `qemu-img convert` if needed)
+- **No cdrom device** attached — OVMF tries cdrom first and may fail to enumerate virtio-blk
+
+The `luks-boot-qemu-installed` justfile recipe follows this pattern. Boot the serial log
+to confirm — GDM appearing in the log (`Started gdm.service`) is sufficient evidence.
+The GTK window will show GNOME once GDM starts (no additional NVRAM/EFI configuration needed).
+
 ### LUKS E2E CI build pipeline (2026-06)
 
 `test-luks-install.yml` originally used a 4-step manual pipeline:
