@@ -69,18 +69,14 @@ jobs:
         run: df -h /
 
       - name: Build live squashfs + boot tar
+        env:
+          SUPERISO_COMPRESSION: release
         run: |
           sudo mkdir -p /var/iso-build
-          sudo bash scripts/build-live-squashfs.sh \
+          sudo -E bash scripts/build-live-squashfs.sh \
             localhost/dakota-nvidia-live:latest \
             /var/iso-build/dakota-nvidia.rootfs.sfs \
             /var/iso-build/dakota-nvidia-boot.tar
-
-      - name: Build offline image store squashfs
-        run: |
-          sudo bash scripts/build-offline-store.sh \
-            /var/iso-build/store.squashfs.img \
-            ghcr.io/projectbluefin/dakota-nvidia:stable
 
       - name: Disk space before ISO assembly
         run: df -h /
@@ -88,7 +84,6 @@ jobs:
       - name: Assemble ISO
         run: |
           sudo bash live/src/build-iso.sh \
-            --store /var/iso-build/store.squashfs.img \
             /var/iso-build/dakota-nvidia-boot.tar \
             /var/iso-build/dakota-nvidia.rootfs.sfs \
             /var/iso-build/dakota-live.iso
