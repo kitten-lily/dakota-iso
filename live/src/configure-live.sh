@@ -263,11 +263,21 @@ install -Dm644 "$SCRIPT_DIR/images/dakotaraptor.png" /usr/share/bootc-installer/
 #                 local_imgref for offline installation
 #
 # TARGET controls which OCI image is embedded in this squashfs's VFS
-# containers-storage and therefore available for offline install.  Each live
-# environment on the dual-env ISO carries its own image; the other variant
-# can be installed via network.
+# containers-storage and therefore available for offline install.  The live
+# environment is always the NVIDIA variant (safe for all hardware).
+#
+# imgref is set to the BASE (non-nvidia) image so that bootc-installer's
+# nvidia_imgref auto-detection (processor.py) can match the images.json entry:
+#   - NVIDIA GPU present  → installs dakota-nvidia:stable, tracks dakota-nvidia:stable
+#   - No NVIDIA GPU       → installs from ISO (dakota-nvidia:stable offline),
+#                           but targetImgref = dakota:stable so first bootc upgrade
+#                           rebases to the lighter non-nvidia variant automatically
+#
+# local_imgref overrides the install SOURCE to the offline store image (nvidia),
+# while imgref/targetImgref control what tag is written into the installed system.
 TARGET="${TARGET:-dakota-nvidia}"
-IMGREF="ghcr.io/projectbluefin/${TARGET}:latest"
+BASE_IMGREF="ghcr.io/projectbluefin/dakota:stable"
+NVIDIA_IMGREF="ghcr.io/projectbluefin/dakota-nvidia:stable"
 
 mkdir -p /etc/bootc-installer
 cp "$SCRIPT_DIR/etc/bootc-installer/images.json" /etc/bootc-installer/images.json
@@ -280,8 +290,10 @@ import json, sys
 with open("$SCRIPT_DIR/etc/bootc-installer/recipe.json") as f:
     recipe = json.load(f)
 
-recipe["imgref"] = "$IMGREF"
-recipe["local_imgref"] = "containers-storage:$IMGREF"
+# imgref = base image — matched by _find_nvidia_imgref_for() in processor.py
+# local_imgref = nvidia image — overrides install source to offline store
+recipe["imgref"] = "$BASE_IMGREF"
+recipe["local_imgref"] = "containers-storage:$NVIDIA_IMGREF"
 
 with open("/etc/bootc-installer/recipe.json", "w") as f:
     json.dump(recipe, f, indent=2)

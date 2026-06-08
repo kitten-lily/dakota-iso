@@ -1,21 +1,11 @@
 {
-  "default_image": "ghcr.io/projectbluefin/dakota-nvidia:latest",
+  "default_image": "ghcr.io/projectbluefin/dakota:stable",
   "fallback_flatpaks": [],
   "images": [
     {
-      "name": "Dakota (NVIDIA)",
-      "imgref": "ghcr.io/projectbluefin/dakota-nvidia:latest",
-      "desc": "Project Bluefin Prototype — NVIDIA GPU support",
-      "icon": "resource:///org/bootcinstaller/Installer/images/dakota.png",
-      "bootloader": "systemd",
-      "filesystem": "btrfs",
-      "composefs": true,
-      "needs_user_creation": false,
-      "flatpak_var_path": "state/os/default/var"
-    },
-    {
       "name": "Dakota",
-      "imgref": "ghcr.io/projectbluefin/dakota:latest",
+      "imgref": "ghcr.io/projectbluefin/dakota:stable",
+      "nvidia_imgref": "ghcr.io/projectbluefin/dakota-nvidia:stable",
       "desc": "Project Bluefin Prototype",
       "icon": "resource:///org/bootcinstaller/Installer/images/dakota.png",
       "bootloader": "systemd",

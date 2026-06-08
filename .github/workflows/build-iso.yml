@@ -46,12 +46,12 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             sudo podman login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # Pull both payload images before anything else so they are in the
-      # local podman store when build-offline-store.sh copies them.
+      # Pull nvidia payload image — the only image needed in the offline store.
+      # Non-nvidia users install from this store; their installed system tracks
+      # dakota:stable and rebases on first bootc upgrade automatically.
       - name: Pull offline payload images
         run: |
-          sudo podman pull ghcr.io/projectbluefin/dakota-nvidia:latest
-          sudo podman pull ghcr.io/projectbluefin/dakota:latest
+          sudo podman pull ghcr.io/projectbluefin/dakota-nvidia:stable
 
       # Build only the NVIDIA live container — it's the one that boots live.
       # Non-NVIDIA is available for install via the offline store.
@@ -80,8 +80,7 @@ jobs:
         run: |
           sudo bash scripts/build-offline-store.sh \
             /var/iso-build/store.squashfs.img \
-            ghcr.io/projectbluefin/dakota-nvidia:latest \
-            ghcr.io/projectbluefin/dakota:latest
+            ghcr.io/projectbluefin/dakota-nvidia:stable
 
       - name: Disk space before ISO assembly
         run: df -h /
