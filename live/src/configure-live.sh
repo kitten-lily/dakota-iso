@@ -117,21 +117,27 @@ chown -R liveuser:liveuser /home/liveuser/.config
 # the welcome-dialog-last-shown-version=999 key below.
 rm -f /usr/share/applications/org.gnome.Tour.desktop
 
-# Override the tuna-installer flatpak's desktop entry so it appears as
-# "Dakota Installer" with the dakota icon instead of "bootc Installer (Devel)".
+# App ID differs between stable and dev channel builds.  Define early so it
+# can be used in the desktop override and autostart sections below.
+INSTALLER_APP_ID="org.bootcinstaller.Installer"
+[[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]] && INSTALLER_APP_ID="org.bootcinstaller.Installer.Devel"
+
+# Override the installer flatpak's desktop entry so it appears as
+# "Dakota Installer" with the dakota icon instead of "bootc Installer".
 # /usr/local/share/applications/ is earlier in XDG_DATA_DIRS than the flatpak
 # export path, so this file takes precedence without modifying the flatpak.
 mkdir -p /usr/local/share/applications
-cat > /usr/local/share/applications/org.bootcinstaller.Installer.Devel.desktop << 'DESKTOPEOF'
+INSTALLER_DESKTOP_ID="${INSTALLER_APP_ID}.desktop"
+cat > "/usr/local/share/applications/${INSTALLER_DESKTOP_ID}" << DESKTOPEOF
 [Desktop Entry]
 Name=Dakota Installer
-Exec=/usr/bin/flatpak run --branch=master --arch=x86_64 --command=bootc-installer org.bootcinstaller.Installer.Devel
+Exec=/usr/bin/flatpak run --branch=master --arch=x86_64 --command=bootc-installer ${INSTALLER_APP_ID}
 Icon=dakota
 Terminal=false
 Type=Application
 Categories=GTK;System;Settings;
 StartupNotify=true
-X-Flatpak=org.bootcinstaller.Installer.Devel
+X-Flatpak=${INSTALLER_APP_ID}
 DESKTOPEOF
 
 # Suppress the GNOME Tour / "Welcome to Bluefin" dialog on first login.
@@ -304,10 +310,19 @@ PYEOF
 # inside a Flatpak sandbox.
 touch /etc/bootc-installer/live-iso-mode
 
+# Prevent bluefin-remove-installer.service from running in the live env.
+# The service is designed for installed systems to remove the installer on first
+# boot.  In the live ISO the installer must remain available.  The condition
+# ConditionPathExists=!/etc/bootc-installer/live-iso-mode ensures:
+#   live ISO  → live-iso-mode EXISTS  → service is skipped ✓
+#   installed → live-iso-mode ABSENT  → service runs normally ✓
+mkdir -p /usr/lib/systemd/system/bluefin-remove-installer.service.d
+cat > /usr/lib/systemd/system/bluefin-remove-installer.service.d/live-skip.conf << 'SKIPCEOF'
+[Unit]
+ConditionPathExists=!/etc/bootc-installer/live-iso-mode
+SKIPCEOF
+
 # ── Installer autostart ───────────────────────────────────────────────────────
-# App ID differs between stable and dev channel builds.
-INSTALLER_APP_ID="org.bootcinstaller.Installer"
-[[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]] && INSTALLER_APP_ID="org.bootcinstaller.Installer.Devel"
 
 mkdir -p /etc/xdg/autostart
 # BOOTC_CUSTOM_RECIPE (bootc-installer): inside the Flatpak sandbox /etc is
