@@ -195,11 +195,11 @@ AutomaticLogin=liveuser
 GDMEOF
 
 # ── /var/tmp tmpfs ────────────────────────────────────────────────────────────
-# The live overlayfs puts /var on a small RAM overlay.  bootc needs substantial
-# space in /var/tmp when staging an install; mount a dedicated tmpfs there.
-# Using size=8G instead of size=50%: on VMs with less RAM the kernel silently
-# caps to available memory, but this avoids the 2 GiB ceiling that a 4 GiB VM
-# gets with 50%.  On real hardware with 16+ GiB RAM it's a non-issue.
+# The live overlayfs puts /var on a small RAM overlay.  During install skopeo
+# writes intermediate blob temp files to /var/tmp regardless of TMPDIR.  With
+# the squashed 9 GB dakota-nvidia image the uncompressed blob exceeds 8 GB, so
+# use 80% of total RAM so it scales with the machine (min system requirement
+# for the nvidia image is 16 GB, giving ~13 GB here).
 cat > /usr/lib/systemd/system/var-tmp.mount << 'UNITEOF'
 [Unit]
 Description=Large tmpfs for /var/tmp in the live environment
@@ -208,7 +208,7 @@ Description=Large tmpfs for /var/tmp in the live environment
 What=tmpfs
 Where=/var/tmp
 Type=tmpfs
-Options=size=8G,nr_inodes=1m
+Options=size=80%,nr_inodes=1m
 
 [Install]
 WantedBy=local-fs.target
