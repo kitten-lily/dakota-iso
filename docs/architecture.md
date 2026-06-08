@@ -185,3 +185,33 @@ Always verify with xorriso `--report_system_area` before shipping an ISO.
 If `driver = "overlay"` is active in `/etc/containers/storage.conf`, the first bootc
 operation creates a `db.sql` that conflicts with VFS metadata. The installer then fails
 to find the embedded OCI image. `configure-live.sh` must explicitly set `driver = "vfs"`.
+
+### nvidia_imgref auto-detection via bootc-installer (2026-06)
+
+bootc-installer v2.6.1 adds `nvidia_imgref` support in `processor.py`.
+When an `images.json` catalog entry has `nvidia_imgref`, the installer auto-detects
+the GPU at install time:
+
+- **NVIDIA GPU present**: installs + tracks `nvidia_imgref`
+- **No NVIDIA GPU**: installs from ISO offline store (nvidia image), but writes
+  `targetImgref = base imgref` into the installed system — so the first `bootc upgrade`
+  rebases to the lighter non-nvidia variant automatically.
+
+**Critical: `recipe.imgref` must be the BASE image (not nvidia)** for
+`_find_nvidia_imgref_for()` to match the `images.json` entry by `imgref`.
+`configure-live.sh` uses `BASE_IMGREF` / `NVIDIA_IMGREF` separately:
+- `recipe["imgref"] = BASE_IMGREF` (matched by processor.py)
+- `recipe["local_imgref"] = "containers-storage:{NVIDIA_IMGREF}"` (offline install source)
+
+**Flatpak path bug in `image.py`** (fixed in projectbluefin/bootc-installer#183):
+`_load_manifest()` was hardcoded to `/etc/bootc-installer/images.json`. Inside a
+Flatpak sandbox, host `/etc` is at `/run/host/etc` — so the live ISO's custom
+`images.json` was never loaded, falling back to the bundled GResource which has no
+`nvidia_imgref`. The fix applies the same `/.flatpak-info` detection already used by
+`RecipeLoader` in `recipe.py`. This PR must land and ship in a new Flatpak release
+for NVIDIA auto-detection to work end-to-end.
+
+**Storage savings from single-image store**:
+`dakota:stable` is NOT needed in the offline store — it's only a tracking ref fetched
+from GHCR on the first `bootc upgrade`. Storing only `dakota-nvidia:stable` saves
+~2.2 GB per ISO (~7.8 GB → ~5.6 GB).
