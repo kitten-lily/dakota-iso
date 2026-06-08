@@ -73,6 +73,7 @@ INSTALLER_APP_ID="org.bootcinstaller.Installer"
 # file:// remote goes through the full deploy pipeline and correctly creates
 # the deploy/ ref so the app is visible and runnable.
 INSTALLER_LOCAL_REPO="/tmp/installer-local-repo"
+ostree init --repo="${INSTALLER_LOCAL_REPO}" --mode=archive-z2
 flatpak build-import-bundle "${INSTALLER_LOCAL_REPO}" /tmp/tuna-installer.flatpak
 rm -f /tmp/tuna-installer.flatpak
 flatpak remote-add --system --no-gpg-verify installer-local "file://${INSTALLER_LOCAL_REPO}"
