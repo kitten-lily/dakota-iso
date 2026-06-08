@@ -45,10 +45,11 @@ INSTALLER_REPO="projectbluefin/bootc-installer"
 FALLBACK_REPO="tuna-os/tuna-installer"
 FLATPAK_FILENAME="org.bootcinstaller.Installer.flatpak"
 if [[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]]; then
-    RELEASE_TAG="latest-dev"
     FLATPAK_FILENAME="org.bootcinstaller.Installer.Devel.flatpak"
-    PRIMARY_URL="https://github.com/${INSTALLER_REPO}/releases/download/${RELEASE_TAG}/${FLATPAK_FILENAME}"
-    FALLBACK_URL="https://github.com/${FALLBACK_REPO}/releases/download/${RELEASE_TAG}/${FLATPAK_FILENAME}"
+    # projectbluefin/bootc-installer uses tag "latest-dev" for dev builds.
+    # tuna-os/tuna-installer uses tag "continuous-dev" — different naming convention.
+    PRIMARY_URL="https://github.com/${INSTALLER_REPO}/releases/download/latest-dev/${FLATPAK_FILENAME}"
+    FALLBACK_URL="https://github.com/${FALLBACK_REPO}/releases/download/continuous-dev/${FLATPAK_FILENAME}"
 else
     # Use GitHub's /releases/latest/download/ redirect — always resolves to the
     # current latest stable release without needing to know the version tag.

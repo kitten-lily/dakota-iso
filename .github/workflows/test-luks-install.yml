@@ -108,32 +108,14 @@ jobs:
           sudo mkdir -p /var/iso-build
           mkdir -p output
 
-          # 1. Build the live container with SSH debug mode enabled
-          sudo podman build \
-            --cap-add sys_admin --security-opt label=disable \
-            --build-arg TARGET=dakota-nvidia \
-            --build-arg DEBUG=1 \
-            --build-arg INSTALLER_CHANNEL=${{ matrix.installer_channel }} \
-            -t localhost/dakota-nvidia-live:latest ./live
-
-          # 2. Export rootfs squashfs + boot files tar
-          sudo bash scripts/build-live-squashfs.sh \
-            localhost/dakota-nvidia-live:latest \
-            /var/iso-build/dakota-nvidia.rootfs.sfs \
-            /var/iso-build/boot.tar
-
-          # 3. Build offline image store (dakota-nvidia is already in root's storage
-          #    from the podman build above — no extra pull needed)
-          sudo bash scripts/build-offline-store.sh \
-            /var/iso-build/store.squashfs.img \
-            ghcr.io/projectbluefin/dakota-nvidia:latest
-
-          # 4. Assemble the UEFI-bootable live ISO with offline store embedded
-          sudo bash live/src/build-iso.sh \
-            --store /var/iso-build/store.squashfs.img \
-            /var/iso-build/boot.tar \
-            /var/iso-build/dakota-nvidia.rootfs.sfs \
-            /var/iso-build/dakota-live.iso
+          # Use just iso-sd-boot — handles container build + VFS store population
+          # + squashfs assembly + ISO assembly in one step.
+          # debug=1 enables SSH for the LUKS install step below.
+          sudo just \
+            debug=1 \
+            installer_channel=${{ matrix.installer_channel }} \
+            output_dir=/var/iso-build \
+            iso-sd-boot dakota
 
           sudo cp /var/iso-build/dakota-live.iso output/dakota-live.iso
           sudo chown -R "$USER:$(id -gn)" output/
