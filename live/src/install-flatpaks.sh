@@ -68,7 +68,6 @@ INSTALLER_APP_ID="org.bootcinstaller.Installer"
 
 flatpak install --system --noninteractive --bundle /tmp/tuna-installer.flatpak || \
     flatpak update --system --noninteractive "${INSTALLER_APP_ID}"
-rm /tmp/tuna-installer.flatpak
 
 # flatpak install --bundle in a container build (no flatpak daemon) does not
 # create the 'current' symlink that flatpak run requires to find the deployment.
@@ -83,7 +82,7 @@ for BRANCH_DIR in "${APP_ARCH_DIR}"/*/; do
         echo "Created flatpak current symlink: ${BRANCH}/${DEPLOY}"
     fi
 done
-rm /tmp/tuna-installer.flatpak
+rm -f /tmp/tuna-installer.flatpak
 
 flatpak override --system --filesystem=/etc:ro "${INSTALLER_APP_ID}"
 
