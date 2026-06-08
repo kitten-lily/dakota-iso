@@ -36,17 +36,17 @@ flatpak remote-add --system --if-not-exists flathub \
 
 # bootc-installer bundle
 # INSTALLER_CHANNEL controls which release tag to pull from:
-#   stable (default) → continuous   (latest stable build from prod branch)
-#   dev              → continuous-dev (latest dev build, tracks dev branch)
+#   stable (default) → latest-stable (latest stable build from prod branch)
+#   dev              → latest-dev (latest dev build, tracks dev branch)
 # Primary source: projectbluefin/bootc-installer (Project Bluefin's fork).
 # Fallback: tuna-os/tuna-installer (upstream) if projectbluefin assets are unavailable.
 # v2.5.0 includes fisherman v0.2.0 with fix for #38 (OCI cache mount on composefs/btrfs).
 INSTALLER_REPO="projectbluefin/bootc-installer"
 FALLBACK_REPO="tuna-os/tuna-installer"
-RELEASE_TAG="continuous"
+RELEASE_TAG="latest-stable"
 FLATPAK_FILENAME="org.bootcinstaller.Installer.flatpak"
 if [[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]]; then
-    RELEASE_TAG="continuous-dev"
+    RELEASE_TAG="latest-dev"
     FLATPAK_FILENAME="org.bootcinstaller.Installer.Devel.flatpak"
 fi
 if ! curl --retry 3 --fail --location \
