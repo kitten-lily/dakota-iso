@@ -46,12 +46,12 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             sudo podman login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # Pull both payload images before anything else so they are in the
-      # local podman store when build-offline-store.sh copies them.
+      # Pull nvidia payload image — the only image needed in the offline store.
+      # Non-nvidia users install from this store; their installed system tracks
+      # dakota:stable and rebases on first bootc upgrade automatically.
       - name: Pull offline payload images
         run: |
-          sudo podman pull ghcr.io/projectbluefin/dakota-nvidia:latest
-          sudo podman pull ghcr.io/projectbluefin/dakota:latest
+          sudo podman pull ghcr.io/projectbluefin/dakota-nvidia:stable
 
       # Build only the NVIDIA live container — it's the one that boots live.
       # Non-NVIDIA is available for install via the offline store.
@@ -69,19 +69,29 @@ jobs:
         run: df -h /
 
       - name: Build live squashfs + boot tar
+        env:
+          SUPERISO_COMPRESSION: release
         run: |
           sudo mkdir -p /var/iso-build
-          sudo bash scripts/build-live-squashfs.sh \
+          sudo -E bash scripts/build-live-squashfs.sh \
+            --oci-image ghcr.io/projectbluefin/dakota-nvidia:stable \
             localhost/dakota-nvidia-live:latest \
             /var/iso-build/dakota-nvidia.rootfs.sfs \
             /var/iso-build/dakota-nvidia-boot.tar
 
-      - name: Build offline image store squashfs
+      - name: Verify offline OCI store is embedded
         run: |
-          sudo bash scripts/build-offline-store.sh \
-            /var/iso-build/store.squashfs.img \
-            ghcr.io/projectbluefin/dakota-nvidia:latest \
-            ghcr.io/projectbluefin/dakota:latest
+          sudo apt-get install -y squashfs-tools -qq
+          # Verify /var/lib/containers/storage is non-empty and contains the expected
+          # image.  An empty store means the offline install will fail (issue #78).
+          COUNT=$(sudo unsquashfs -lc /var/iso-build/dakota-nvidia.rootfs.sfs \
+            var/lib/containers/storage 2>/dev/null | grep -c "ghcr.io" || true)
+          if [[ "${COUNT}" -eq 0 ]]; then
+            echo "ERROR: VFS containers-storage is empty — OCI embedding failed" >&2
+            echo "The ISO would ship without an offline install store (see issue #78)" >&2
+            exit 1
+          fi
+          echo ">>> OCI store assertion passed (${COUNT} ghcr.io refs found)"
 
       - name: Disk space before ISO assembly
         run: df -h /
@@ -89,7 +99,6 @@ jobs:
       - name: Assemble ISO
         run: |
           sudo bash live/src/build-iso.sh \
-            --store /var/iso-build/store.squashfs.img \
             /var/iso-build/dakota-nvidia-boot.tar \
             /var/iso-build/dakota-nvidia.rootfs.sfs \
             /var/iso-build/dakota-live.iso

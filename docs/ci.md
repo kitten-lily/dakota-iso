@@ -23,15 +23,19 @@ How the GitHub Actions workflows build, test, and publish Dakota ISOs.
 1. **Free disk space** — `jlumbroso/free-disk-space` reclaims ~119 GB at `/var/iso-build`
 2. **Install deps** — `apt-get install podman buildah skopeo mtools xorriso squashfs-tools dosfstools isomd5sum`
 3. **Log in to GHCR** — `sudo podman login ghcr.io`
-4. **Pull payload images** — pulls `dakota-nvidia:latest` and `dakota:latest` into local podman store
+4. **Pull payload image** — pulls only `dakota-nvidia:stable` (the unified ISO base)
 5. **Build live container** — `podman build live/ --build-arg TARGET=dakota-nvidia` → `localhost/dakota-nvidia-live:latest`
-6. **Build live squashfs** — `scripts/build-live-squashfs.sh` → `dakota-nvidia.rootfs.sfs` + `dakota-nvidia-boot.tar`
-7. **Build offline store** — `scripts/build-offline-store.sh` → `store.squashfs.img` (both dakota + dakota-nvidia)
-8. **Assemble ISO** — `live/src/build-iso.sh --store store.squashfs.img ...` → `dakota-live.iso` (~4.5 GB)
-9. **Generate checksum** — dated + latest variants
-10. **Upload to R2** — `dakota-live-YYYYMMDD-<sha>.iso` + `dakota-live-latest.iso` + checksums
-11. **Boot verification** — QEMU UEFI boot, wait for `DAKOTA_LIVE_READY` serial marker
-12. **Upload artifacts** — ISO + checksum + screenshot (7-day retention)
+6. **Build live squashfs** — `scripts/build-live-squashfs.sh` with `SUPERISO_COMPRESSION=release` → `dakota-nvidia.rootfs.sfs` + `dakota-nvidia-boot.tar` (~5.3 GB)
+7. **Assemble ISO** — `live/src/build-iso.sh` → `dakota-live.iso` (no `--store` flag — OCI already embedded in squashfs as VFS)
+8. **Generate checksum** — dated + latest variants
+9. **Upload to R2** — `dakota-live-YYYYMMDD-<sha>.iso` + `dakota-live-latest.iso` + checksums
+10. **Boot verification** — QEMU UEFI boot, wait for `DAKOTA_LIVE_READY` serial marker
+11. **Upload artifacts** — ISO + checksum + screenshot (7-day retention)
+
+> ⚠️ **Do not add `--store` back or re-add the offline store squashfs step.**  
+> The OCI image is already embedded in the live squashfs via VFS containers-storage.
+> Building a separate `store.squashfs.img` doubles the OCI payload, producing an ~8 GB
+> ISO instead of ~5.3 GB. See lessons below.
 
 ### ⚠️ installer_channel is locked to `stable` in CI
 
@@ -134,9 +138,26 @@ pip install pytest
 pytest tests/ -v
 ```
 
----
+### Lessons
 
-## Lessons
+### Double-embedded OCI store inflates ISO to 8 GB (2026-06)
+
+The live container (`live/Containerfile`) already bakes the OCI image into the squashfs
+as VFS containers-storage via `configure-live.sh` and `install-flatpaks.sh`.
+Building a separate `store.squashfs.img` with `scripts/build-offline-store.sh` and
+passing `--store store.squashfs.img` to `build-iso.sh` embeds the same ~4 GB OCI
+image **twice** in the final ISO — resulting in ~8 GB instead of ~5.3 GB.
+
+**Fix:** Remove the "Build offline image store squashfs" CI step entirely.
+Call `build-iso.sh` without `--store`. This is the correct architecture for the
+unified VFS-embedded ISO.
+
+### Release compression for production ISOs (2026-06)
+
+`scripts/build-live-squashfs.sh` defaults to zstd level 3 (`SUPERISO_COMPRESSION=fast`).
+CI sets `SUPERISO_COMPRESSION=release` (zstd-15, 1M blocks) in the squashfs build step —
+this produces ~20% smaller ISOs at ~5× longer squashfs build time. Always use `release`
+for ISOs published to R2. Use `fast` only for local testing.
 
 ### installer_channel=dev regression: oci-cache/index.json not found (2026-05)
 
@@ -155,3 +176,31 @@ QEMU serial (`-serial file:...`) captures ttyS0 output only.
 
 Fix: `StandardOutput=tty` + `TTYPath=/dev/ttyS0` for direct serial writes.
 CI falls back to SSH connectivity check if the marker is absent.
+
+### Offline install failed: VFS containers-storage missing from CI ISOs (2026-06)
+
+**Symptom:** `fisherman: fatal: ... reference "containers-storage:ghcr.io/projectbluefin/dakota-nvidia:stable" does not resolve to an image ID`
+
+**Root cause:** The CI build called `scripts/build-live-squashfs.sh` without `--oci-image`, so
+the live squashfs shipped with an empty `/var/lib/containers/storage`.  The live `recipe.json`
+has `local_imgref=containers-storage:ghcr.io/projectbluefin/dakota-nvidia:stable`, which
+fisherman treats as authoritative.  When the local store is empty, the install fails even if
+the user has a working internet connection (fisherman does not fall back to `docker://`).
+
+**Why local builds were unaffected:** `just iso-sd-boot` always did the squash+skopeo step and
+baked the OCI into the squashfs.  CI diverged from this path and the gap was undetected
+because CI only validated boot, not install.
+
+**Fix:** `scripts/build-live-squashfs.sh` now accepts `--oci-image <ref>`.  When provided it:
+1. Squashes the payload to a single layer via `buildah commit --squash`
+2. Runs `skopeo copy` inside the live container (for JSON tar-split compatibility)
+3. Bind-mounts the populated VFS staging dir at `/var/lib/containers/storage` before mksquashfs
+
+`build-iso.yml` now passes `--oci-image ghcr.io/projectbluefin/dakota-nvidia:stable` and
+asserts the embedded store is non-empty before uploading the ISO to R2.
+
+**Invariant:** The CI-built squashfs **must** contain a populated VFS store at
+`var/lib/containers/storage` with the `dakota-nvidia:stable` image.  The assertion step
+catches any regression before upload.
+
+See issue #78.

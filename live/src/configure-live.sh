@@ -117,21 +117,27 @@ chown -R liveuser:liveuser /home/liveuser/.config
 # the welcome-dialog-last-shown-version=999 key below.
 rm -f /usr/share/applications/org.gnome.Tour.desktop
 
-# Override the tuna-installer flatpak's desktop entry so it appears as
-# "Dakota Installer" with the dakota icon instead of "bootc Installer (Devel)".
+# App ID differs between stable and dev channel builds.  Define early so it
+# can be used in the desktop override and autostart sections below.
+INSTALLER_APP_ID="org.bootcinstaller.Installer"
+[[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]] && INSTALLER_APP_ID="org.bootcinstaller.Installer.Devel"
+
+# Override the installer flatpak's desktop entry so it appears as
+# "Dakota Installer" with the dakota icon instead of "bootc Installer".
 # /usr/local/share/applications/ is earlier in XDG_DATA_DIRS than the flatpak
 # export path, so this file takes precedence without modifying the flatpak.
 mkdir -p /usr/local/share/applications
-cat > /usr/local/share/applications/org.bootcinstaller.Installer.Devel.desktop << 'DESKTOPEOF'
+INSTALLER_DESKTOP_ID="${INSTALLER_APP_ID}.desktop"
+cat > "/usr/local/share/applications/${INSTALLER_DESKTOP_ID}" << DESKTOPEOF
 [Desktop Entry]
 Name=Dakota Installer
-Exec=/usr/bin/flatpak run --branch=master --arch=x86_64 --command=bootc-installer org.bootcinstaller.Installer.Devel
+Exec=/usr/bin/flatpak run --branch=master --arch=x86_64 --command=bootc-installer ${INSTALLER_APP_ID}
 Icon=dakota
 Terminal=false
 Type=Application
 Categories=GTK;System;Settings;
 StartupNotify=true
-X-Flatpak=org.bootcinstaller.Installer.Devel
+X-Flatpak=${INSTALLER_APP_ID}
 DESKTOPEOF
 
 # Suppress the GNOME Tour / "Welcome to Bluefin" dialog on first login.
@@ -189,11 +195,11 @@ AutomaticLogin=liveuser
 GDMEOF
 
 # ── /var/tmp tmpfs ────────────────────────────────────────────────────────────
-# The live overlayfs puts /var on a small RAM overlay.  bootc needs substantial
-# space in /var/tmp when staging an install; mount a dedicated tmpfs there.
-# Using size=8G instead of size=50%: on VMs with less RAM the kernel silently
-# caps to available memory, but this avoids the 2 GiB ceiling that a 4 GiB VM
-# gets with 50%.  On real hardware with 16+ GiB RAM it's a non-issue.
+# The live overlayfs puts /var on a small RAM overlay.  During install skopeo
+# writes intermediate blob temp files to /var/tmp regardless of TMPDIR.  With
+# the squashed 9 GB dakota-nvidia image the uncompressed blob exceeds 8 GB, so
+# use 80% of total RAM so it scales with the machine (min system requirement
+# for the nvidia image is 16 GB, giving ~13 GB here).
 cat > /usr/lib/systemd/system/var-tmp.mount << 'UNITEOF'
 [Unit]
 Description=Large tmpfs for /var/tmp in the live environment
@@ -202,7 +208,7 @@ Description=Large tmpfs for /var/tmp in the live environment
 What=tmpfs
 Where=/var/tmp
 Type=tmpfs
-Options=size=8G,nr_inodes=1m
+Options=size=80%,nr_inodes=1m
 
 [Install]
 WantedBy=local-fs.target
@@ -263,11 +269,21 @@ install -Dm644 "$SCRIPT_DIR/images/dakotaraptor.png" /usr/share/bootc-installer/
 #                 local_imgref for offline installation
 #
 # TARGET controls which OCI image is embedded in this squashfs's VFS
-# containers-storage and therefore available for offline install.  Each live
-# environment on the dual-env ISO carries its own image; the other variant
-# can be installed via network.
+# containers-storage and therefore available for offline install.  The live
+# environment is always the NVIDIA variant (safe for all hardware).
+#
+# imgref is set to the BASE (non-nvidia) image so that bootc-installer's
+# nvidia_imgref auto-detection (processor.py) can match the images.json entry:
+#   - NVIDIA GPU present  → installs dakota-nvidia:stable, tracks dakota-nvidia:stable
+#   - No NVIDIA GPU       → installs from ISO (dakota-nvidia:stable offline),
+#                           but targetImgref = dakota:stable so first bootc upgrade
+#                           rebases to the lighter non-nvidia variant automatically
+#
+# local_imgref overrides the install SOURCE to the offline store image (nvidia),
+# while imgref/targetImgref control what tag is written into the installed system.
 TARGET="${TARGET:-dakota-nvidia}"
-IMGREF="ghcr.io/projectbluefin/${TARGET}:latest"
+BASE_IMGREF="ghcr.io/projectbluefin/dakota:stable"
+NVIDIA_IMGREF="ghcr.io/projectbluefin/dakota-nvidia:stable"
 
 mkdir -p /etc/bootc-installer
 cp "$SCRIPT_DIR/etc/bootc-installer/images.json" /etc/bootc-installer/images.json
@@ -280,8 +296,10 @@ import json, sys
 with open("$SCRIPT_DIR/etc/bootc-installer/recipe.json") as f:
     recipe = json.load(f)
 
-recipe["imgref"] = "$IMGREF"
-recipe["local_imgref"] = "containers-storage:$IMGREF"
+# imgref = base image — matched by _find_nvidia_imgref_for() in processor.py
+# local_imgref = nvidia image — overrides install source to offline store
+recipe["imgref"] = "$BASE_IMGREF"
+recipe["local_imgref"] = "containers-storage:$NVIDIA_IMGREF"
 
 with open("/etc/bootc-installer/recipe.json", "w") as f:
     json.dump(recipe, f, indent=2)
@@ -292,19 +310,28 @@ PYEOF
 # inside a Flatpak sandbox.
 touch /etc/bootc-installer/live-iso-mode
 
+# Prevent bluefin-remove-installer.service from running in the live env.
+# The service is designed for installed systems to remove the installer on first
+# boot.  In the live ISO the installer must remain available.  The condition
+# ConditionPathExists=!/etc/bootc-installer/live-iso-mode ensures:
+#   live ISO  → live-iso-mode EXISTS  → service is skipped ✓
+#   installed → live-iso-mode ABSENT  → service runs normally ✓
+mkdir -p /usr/lib/systemd/system/bluefin-remove-installer.service.d
+cat > /usr/lib/systemd/system/bluefin-remove-installer.service.d/live-skip.conf << 'SKIPCEOF'
+[Unit]
+ConditionPathExists=!/etc/bootc-installer/live-iso-mode
+SKIPCEOF
+
 # ── Installer autostart ───────────────────────────────────────────────────────
-# App ID differs between stable and dev channel builds.
-INSTALLER_APP_ID="org.bootcinstaller.Installer"
-[[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]] && INSTALLER_APP_ID="org.bootcinstaller.Installer.Devel"
 
 mkdir -p /etc/xdg/autostart
-# VANILLA_CUSTOM_RECIPE workaround (tuna-os/tuna-installer#26): inside the
-# Flatpak sandbox /etc is reserved; the host /etc is at /run/host/etc.  Pass
-# the recipe via env var at the /run/host path so the installer finds it.
+# BOOTC_CUSTOM_RECIPE (bootc-installer): inside the Flatpak sandbox /etc is
+# reserved; the host /etc is at /run/host/etc.  Pass the recipe via env var
+# at the /run/host path so the installer finds it.
 cat > /etc/xdg/autostart/tuna-installer.desktop << DTEOF
 [Desktop Entry]
 Name=Dakota Installer
-Exec=flatpak run --env=VANILLA_CUSTOM_RECIPE=/run/host/etc/bootc-installer/recipe.json ${INSTALLER_APP_ID}
+Exec=flatpak run --env=BOOTC_CUSTOM_RECIPE=/run/host/etc/bootc-installer/recipe.json ${INSTALLER_APP_ID}
 Icon=dakota
 Type=Application
 X-GNOME-Autostart-enabled=true
@@ -318,7 +345,7 @@ cat > /usr/share/applications/dakota-installer.desktop << DTEOF
 [Desktop Entry]
 Name=Dakota Installer
 Comment=Install Dakota to your computer
-Exec=flatpak run --env=VANILLA_CUSTOM_RECIPE=/run/host/etc/bootc-installer/recipe.json ${INSTALLER_APP_ID}
+Exec=flatpak run --env=BOOTC_CUSTOM_RECIPE=/run/host/etc/bootc-installer/recipe.json ${INSTALLER_APP_ID}
 Icon=dakota
 Type=Application
 Categories=System;
@@ -396,48 +423,23 @@ EOF
 mkdir -p /usr/lib/tmpfiles.d
 echo 'f /etc/hostname 0644 - - - dakota-live' > /usr/lib/tmpfiles.d/live-hostname.conf
 
-# ── containers-storage: overlay + superiso-store ──────────────────────────────
-# The ISO carries both Dakota images in a shared store squashfs
-# (LiveOS/store.squashfs.img) built by tacklebox offline_payloads.
-# dmsquash-live mounts the ISO at /run/initramfs/live, so the squashfs is
-# visible at /run/initramfs/live/LiveOS/store.squashfs.img.
-# We mount it at /var/lib/superiso-store via a systemd mount unit and register
-# it as an additionalimagestores so bootc-installer can install either image
-# without a network pull.
+# ── containers-storage: VFS driver ───────────────────────────────────────────
+# The OCI payload image is baked into the squashfs as VFS containers-storage
+# at /var/lib/containers/storage.  For CI builds, scripts/build-live-squashfs.sh
+# does this via --oci-image (squash → skopeo copy inside the installer container).
+# For local builds, the justfile iso-sd-boot recipe does the same.
+# Using driver="vfs" lets fisherman find the embedded image via
+# local_imgref="containers-storage:<ref>" in recipe.json for offline install.
+# (Overlay driver would fail to read VFS-format layers and create a conflicting
+# db.sql at first boot.)
 
-mkdir -p /var/lib/superiso-store /var/lib/containers/storage
-
-# systemd mount unit — same pattern as superiso Containerfile.generic.
-STORE_UNIT="$(systemd-escape --path /var/lib/superiso-store).mount"
-cat > "/usr/lib/systemd/system/${STORE_UNIT}" << 'STOREUNITEOF'
-[Unit]
-Description=Tacklebox offline image store (loop-mounted from live ISO)
-DefaultDependencies=no
-After=systemd-remount-fs.service local-fs-pre.target
-Before=local-fs.target
-ConditionPathExists=/run/initramfs/live/LiveOS/store.squashfs.img
-
-[Mount]
-What=/run/initramfs/live/LiveOS/store.squashfs.img
-Where=/var/lib/superiso-store
-Type=squashfs
-Options=loop,ro,nodev
-
-[Install]
-WantedBy=local-fs.target
-STOREUNITEOF
-systemctl enable "${STORE_UNIT}"
-
-# overlay driver + additionalimagestores so both Dakota images are resolvable
-# by bootc-installer and fisherman without touching the live writable store.
+mkdir -p /var/lib/containers/storage
 mkdir -p /etc/containers
 cat > /etc/containers/storage.conf << 'STOREOF'
 [storage]
-driver = "overlay"
+driver = "vfs"
 runroot = "/run/containers/storage"
 graphroot = "/var/lib/containers/storage"
-[storage.options]
-additionalimagestores = ["/var/lib/superiso-store"]
 STOREOF
 
 # fisherman handles scratch space, transport-prefix stripping, OCI export, and

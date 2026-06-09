@@ -20,7 +20,7 @@
 ARG TARGET=dakota-nvidia
 
 # ── Stage 1: Reference image (kernel modules source) ─────────────────────────
-FROM ghcr.io/projectbluefin/${TARGET}:latest AS ref
+FROM ghcr.io/projectbluefin/${TARGET}:stable AS ref
 
 # ── Stage 2: Debian — builds the dmsquash-live initramfs ─────────────────────
 FROM debian:sid AS initramfs-builder
@@ -44,7 +44,7 @@ RUN set -ex; \
 
 # ── Stage 3: Final live image ─────────────────────────────────────────────────
 ARG TARGET=dakota-nvidia
-FROM ghcr.io/projectbluefin/${TARGET}:latest
+FROM ghcr.io/projectbluefin/${TARGET}:stable
 
 ARG TARGET=dakota-nvidia
 ARG INSTALLER_CHANNEL=stable

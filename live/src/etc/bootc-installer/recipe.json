@@ -2,8 +2,8 @@
   "log_file": "/var/log/bootc-installer.log",
   "distro_name": "Dakota",
   "distro_logo": "resource:///org/bootcinstaller/Installer/images/dakota.png",
-  "imgref": "ghcr.io/projectbluefin/dakota:latest",
-  "local_imgref": "containers-storage:ghcr.io/projectbluefin/dakota:latest",
+  "imgref": "ghcr.io/projectbluefin/dakota:stable",
+  "local_imgref": "containers-storage:ghcr.io/projectbluefin/dakota-nvidia:stable",
   "bootloader": "systemd",
   "composeFsBackend": true,
   "tour": {

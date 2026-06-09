@@ -147,6 +147,24 @@ graphical console.
 
 ## Lessons
 
+### Boot installed disk: qcow2 + no cdrom = OVMF discovers virtio-blk (2026-06)
+
+When booting the **installed** disk in QEMU, two things are required for OVMF to
+auto-discover and boot from the virtio-blk device without EFI NVRAM entries:
+
+1. **Disk must be qcow2** (not raw). OVMF's fallback boot scan works correctly with
+   qcow2; raw format can cause scan failures depending on OVMF version.
+2. **No cdrom device attached.** When a cdrom is also connected, OVMF tries it first
+   and may fail to enumerate the virtio-blk device for fallback boot.
+
+The `luks-boot-qemu-installed` justfile recipe follows this pattern — no `-device scsi-cd`,
+disk as `format=qcow2`. Always use the justfile recipe for installed-disk boot.
+
+If you installed to a raw image (e.g. via `dd` or a raw-format QEMU disk), convert first:
+```bash
+qemu-img convert -f raw -O qcow2 /var/tmp/install-disk.img /var/tmp/dakota-luks-install.qcow2
+```
+
 ### /var/tmp for disk images, never /tmp (2026-05)
 
 `/tmp` is a 16 GB tmpfs on this host. Two 50 GB sparse qcow2 images fill it

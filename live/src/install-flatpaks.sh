@@ -35,34 +35,71 @@ flatpak remote-add --system --if-not-exists flathub \
     https://dl.flathub.org/repo/flathub.flatpakrepo
 
 # bootc-installer bundle
-# INSTALLER_CHANNEL controls which release tag to pull from:
-#   stable (default) → latest-stable (latest stable build from prod branch)
-#   dev              → latest-dev (latest dev build, tracks dev branch)
+# INSTALLER_CHANNEL controls which release to pull from:
+#   stable (default) → GitHub "latest" release (non-pre-release)
+#   dev              → latest-dev rolling pre-release (tracks dev branch)
 # Primary source: projectbluefin/bootc-installer (Project Bluefin's fork).
 # Fallback: tuna-os/tuna-installer (upstream) if projectbluefin assets are unavailable.
-# v2.5.0 includes fisherman v0.2.0 with fix for #38 (OCI cache mount on composefs/btrfs).
+# v2.6.1 adds nvidia_imgref GPU auto-detection support.
 INSTALLER_REPO="projectbluefin/bootc-installer"
 FALLBACK_REPO="tuna-os/tuna-installer"
-RELEASE_TAG="latest-stable"
 FLATPAK_FILENAME="org.bootcinstaller.Installer.flatpak"
 if [[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]]; then
-    RELEASE_TAG="latest-dev"
     FLATPAK_FILENAME="org.bootcinstaller.Installer.Devel.flatpak"
+    # projectbluefin/bootc-installer uses tag "latest-dev" for dev builds.
+    # tuna-os/tuna-installer uses tag "continuous-dev" — different naming convention.
+    PRIMARY_URL="https://github.com/${INSTALLER_REPO}/releases/download/latest-dev/${FLATPAK_FILENAME}"
+    FALLBACK_URL="https://github.com/${FALLBACK_REPO}/releases/download/continuous-dev/${FLATPAK_FILENAME}"
+else
+    # Use GitHub's /releases/latest/download/ redirect — always resolves to the
+    # current latest stable release without needing to know the version tag.
+    PRIMARY_URL="https://github.com/${INSTALLER_REPO}/releases/latest/download/${FLATPAK_FILENAME}"
+    FALLBACK_URL="https://github.com/${FALLBACK_REPO}/releases/latest/download/${FLATPAK_FILENAME}"
 fi
 if ! curl --retry 3 --fail --location \
-    "https://github.com/${INSTALLER_REPO}/releases/download/${RELEASE_TAG}/${FLATPAK_FILENAME}" \
+    "${PRIMARY_URL}" \
     -o /tmp/tuna-installer.flatpak 2>/dev/null; then
     echo "Primary source unavailable, falling back to ${FALLBACK_REPO}..."
     curl --retry 3 --fail --location \
-        "https://github.com/${FALLBACK_REPO}/releases/download/${RELEASE_TAG}/${FLATPAK_FILENAME}" \
+        "${FALLBACK_URL}" \
         -o /tmp/tuna-installer.flatpak
 fi
 INSTALLER_APP_ID="org.bootcinstaller.Installer"
 [[ "${INSTALLER_CHANNEL:-stable}" == "dev" ]] && INSTALLER_APP_ID="org.bootcinstaller.Installer.Devel"
 
-flatpak install --system --noninteractive --bundle /tmp/tuna-installer.flatpak || \
+# Import the bundle into a temporary local repo and install from there.
+# flatpak install --bundle in a container build (no running flatpak system
+# daemon) only creates the installer-origin: remote ref — it does NOT create
+# the deploy/ ref that flatpak run/list require.  Installing from a local
+# file:// remote goes through the full deploy pipeline and correctly creates
+# the deploy/ ref so the app is visible and runnable.
+INSTALLER_LOCAL_REPO="/tmp/installer-local-repo"
+ostree init --repo="${INSTALLER_LOCAL_REPO}" --mode=archive-z2
+flatpak build-import-bundle "${INSTALLER_LOCAL_REPO}" /tmp/tuna-installer.flatpak
+rm -f /tmp/tuna-installer.flatpak
+flatpak remote-add --system --no-gpg-verify installer-local "file://${INSTALLER_LOCAL_REPO}"
+flatpak install --system --noninteractive installer-local "${INSTALLER_APP_ID}" || \
     flatpak update --system --noninteractive "${INSTALLER_APP_ID}"
-rm /tmp/tuna-installer.flatpak
+flatpak remote-delete --system --force installer-local || true
+rm -rf "${INSTALLER_LOCAL_REPO}"
+
+# flatpak install inside a container build (no flatpak-system-helper daemon)
+# creates the deployment directory but omits the 'active' symlink inside the
+# branch directory, leaving the app unreachable to 'flatpak run'/'flatpak list'.
+# Reproduce the symlink that a normal installation would create.
+_app_arch_dir="/var/lib/flatpak/app/${INSTALLER_APP_ID}/x86_64"
+for _branch_dir in "${_app_arch_dir}"/*/; do
+    _branch_dir="${_branch_dir%/}"
+    [[ -d "${_branch_dir}" ]] || continue
+    if [[ ! -L "${_branch_dir}/active" ]]; then
+        # Find the single deployment hash directory
+        _hash=$(find "${_branch_dir}" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | head -1)
+        if [[ -n "${_hash}" ]]; then
+            ln -sfn "${_hash}" "${_branch_dir}/active"
+            echo "Created active symlink: ${_branch_dir}/active → ${_hash}"
+        fi
+    fi
+done
 
 flatpak override --system --filesystem=/etc:ro "${INSTALLER_APP_ID}"
 

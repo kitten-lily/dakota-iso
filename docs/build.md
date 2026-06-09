@@ -134,6 +134,28 @@ just debug=1 boot-libvirt-debug dakota
 
 ## Lessons
 
+### Unified ISO: one nvidia image for all hardware (2026-06)
+
+Dakota ships a single ISO built from `ghcr.io/projectbluefin/dakota-nvidia:stable`.
+The live environment runs the nvidia image. At install time, `bootc-installer`'s
+`nvidia_imgref` mechanism auto-detects the GPU:
+
+- **NVIDIA GPU present:** installs `dakota-nvidia:stable`, `targetImgref=dakota-nvidia:stable`
+- **No NVIDIA GPU:** installs offline from the nvidia VFS store, `targetImgref=dakota:stable` —
+  first `bootc upgrade` rebases to the correct non-nvidia variant automatically
+
+**Expected ISO size:** ~5.3 GB (with `compression=release`). If the ISO is ~8 GB, the
+offline OCI store was double-embedded — see `ci.md` lessons.
+
+### CI uses `SUPERISO_COMPRESSION=release` (2026-06)
+
+The `build-iso.yml` CI workflow sets `SUPERISO_COMPRESSION=release` in the squashfs build
+step, producing zstd-15 compression. Local `just iso-sd-boot` defaults to `compression=fast`
+(zstd-3). For production ISOs destined for R2, always use release compression:
+```bash
+just compression=release iso-sd-boot dakota
+```
+
 ### `dakota/src/flatpaks` diverged from `live/src/flatpaks` (2026-06)
 
 `dakota/src/flatpaks` contains `be.alexandervanhee.gradia` but `live/src/flatpaks` does not.

@@ -1,4 +1,20 @@
 #!/usr/bin/bash
+# build-offline-store.sh — DEPRECATED
+#
+# This script is no longer part of the standard ISO build pipeline.  The offline
+# OCI store is now embedded directly into the live squashfs using the --oci-image
+# flag of scripts/build-live-squashfs.sh.  That approach uses VFS containers-
+# storage baked into /var/lib/containers/storage inside the squashfs, which is
+# compatible with the live storage.conf (driver = "vfs") and is simpler to
+# maintain.
+#
+# The superiso-store architecture described here (separate overlay-driver store
+# squashfs, loop-mounted at /var/lib/superiso-store, registered as
+# additionalimagestores) was never fully wired into CI and has an inherent
+# VFS/overlay driver incompatibility with the primary store.  It is retained
+# here for reference only and should not be used.
+#
+# Original description:
 # build-offline-store.sh <output-squashfs> <image> [<image> ...]
 #
 # Pulls each listed OCI image into an isolated containers-storage overlay
