@@ -204,3 +204,20 @@ asserts the embedded store is non-empty before uploading the ISO to R2.
 catches any regression before upload.
 
 See issue #78.
+
+### VFS store not captured by mksquashfs when using bind-mount into overlayfs (2026-06)
+
+**Symptom:** `build-live-squashfs.sh --oci-image` runs successfully, VFS store logs 9.1G, but
+the squashfs is only ~4.2G (no VFS data) and the assertion fails.
+
+**Root cause:** When `SFS_ROOT` is an overlayfs mount (the default on ext4/XFS CI runners),
+the overlayfs filesystem has a different `st_dev` than a bind-mounted directory inside it.
+`mksquashfs` respects filesystem boundaries (stops when `st_dev` changes) and silently skips
+the bind-mounted VFS tree.
+
+**Fix:** Copy the VFS staging dir into the squashfs root with `cp -a` instead of bind-mounting.
+Writes to an overlayfs path go into the overlay upper layer; the resulting files inherit the
+overlayfs `st_dev` and are included by mksquashfs.
+
+**Rule:** Never use `mount --bind` to inject data into a directory that will be squash-packed with
+mksquashfs when the mount point is overlayfs.  Always copy.

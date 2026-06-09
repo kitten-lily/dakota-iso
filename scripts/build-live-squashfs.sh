@@ -116,12 +116,19 @@ if [[ -n "${OCI_IMAGE}" ]]; then
 
     rm -f "${OCI_ARCHIVE}" "${STORAGE_CONF}"
 
-    # Bind-mount the populated VFS staging dir at the squashfs root so
-    # mksquashfs captures it at /var/lib/containers/storage.
-    # (The trap already unmounts ${WORK}/squashfs-root/var/lib/containers/storage.)
+    # Copy the VFS staging dir INTO the squashfs root so mksquashfs captures it
+    # at /var/lib/containers/storage.
+    #
+    # bind-mount does NOT work here: when SFS_ROOT is an overlayfs mount, the
+    # overlayfs and the bind-mount have different st_dev values.  mksquashfs
+    # respects filesystem boundaries (st_dev changes) and silently skips the
+    # bind-mounted tree.  Copying the data into the overlayfs upper layer makes
+    # it part of the same st_dev, so mksquashfs includes it.
     mkdir -p "${SFS_ROOT}/var/lib/containers/storage"
-    mount --bind "${CS_STAGING}" "${SFS_ROOT}/var/lib/containers/storage"
-    echo ">>> [live-squashfs] VFS store size: $(du -sh "${CS_STAGING}" | cut -f1)"
+    echo ">>> [live-squashfs] copying VFS store into squashfs root ($(du -sh "${CS_STAGING}" | cut -f1)) ..."
+    cp -a "${CS_STAGING}/." "${SFS_ROOT}/var/lib/containers/storage/"
+    rm -rf "${CS_STAGING}"
+    echo ">>> [live-squashfs] VFS store embedded: $(du -sh "${SFS_ROOT}/var/lib/containers/storage" | cut -f1)"
 fi
 
 SFS_LEVEL=3; SFS_BLOCK=131072
