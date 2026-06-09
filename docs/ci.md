@@ -194,7 +194,7 @@ because CI only validated boot, not install.
 **Fix:** `scripts/build-live-squashfs.sh` now accepts `--oci-image <ref>`.  When provided it:
 1. Squashes the payload to a single layer via `buildah commit --squash`
 2. Runs `skopeo copy` inside the live container (for JSON tar-split compatibility)
-3. Bind-mounts the populated VFS staging dir at `/var/lib/containers/storage` before mksquashfs
+3. Copies the populated VFS staging dir into the squashfs root with `cp -a` before mksquashfs
 
 `build-iso.yml` now passes `--oci-image ghcr.io/projectbluefin/dakota-nvidia:stable` and
 asserts the embedded store is non-empty before uploading the ISO to R2.

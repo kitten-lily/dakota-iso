@@ -98,10 +98,12 @@ The OCI image is baked directly into the main `squashfs.img` as VFS containers-s
 at `/var/lib/containers/storage`. The installer finds it there for offline installation
 without a network pull. No separate `store.squashfs.img` is needed.
 
-`just iso-sd-boot` populates the store via `podman unshare` + `skopeo copy` inside the
-installer container. The two-step skopeo copy (containers-storage → vfs-staging →
-squashfs) ensures tar-split metadata is written in JSON format (the live ISO expects
-JSON; build-host containers-storage emits binary tar-split).
+`scripts/build-live-squashfs.sh --oci-image <ref>` populates the store (used by both
+`just iso-sd-boot` and CI). It squashes the image to a single layer via `buildah commit
+--squash`, then runs `skopeo copy` **inside the installer container** so tar-split
+metadata is written in JSON format (the live ISO expects JSON; build-host
+containers-storage emits binary tar-split). The VFS staging dir is then copied into the
+squashfs root via `cp -a` (not bind-mount — see CI lessons).
 
 **Why VFS not overlay?**
 - Overlay driver creates a conflicting `db.sql` file at first live boot

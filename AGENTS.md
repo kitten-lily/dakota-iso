@@ -69,6 +69,7 @@ Do not assume you know the build system, disk space requirements, or CI constrai
 |---|---|
 | Any QEMU boot issue (installed disk won't boot, UEFI shell loop) | [`docs/luks-testing.md`](docs/luks-testing.md) |
 | ISO is unexpectedly large (>6 GB) | [`docs/ci.md`](docs/ci.md) — check for double-embedded store |
+| Install fails: `does not resolve to an image ID` | [`docs/ci.md`](docs/ci.md) — VFS store not embedded |
 | CI pipeline changes | [`docs/ci.md`](docs/ci.md) |
 | R2 promotion / named releases | [`docs/r2-promotion.md`](docs/r2-promotion.md) |
 
@@ -158,10 +159,13 @@ just --list        # verify justfile is parseable (no just check target yet)
 The unified dakota ISO must be **~5.3 GB** with `SUPERISO_COMPRESSION=release`.
 
 - If an ISO is **~8 GB**: the offline OCI store squashfs is being double-embedded.
-  The live container already has the OCI baked in as VFS containers-storage.
+  The live squashfs already contains the OCI baked in as VFS containers-storage.
   Do **not** build a separate `store.squashfs.img` or pass `--store` to `build-iso.sh`.
   See [`docs/ci.md`](docs/ci.md) lessons.
 - If an ISO is **~6–7 GB**: compression is set to `fast` (zstd-3). Use `release` for R2.
+- If an ISO is **~4.4 GB** and installs fail with `does not resolve to an image ID`: the
+  VFS store is missing. `scripts/build-live-squashfs.sh` must be called with
+  `--oci-image <ref>`. See [`docs/ci.md`](docs/ci.md) — issue #78.
 
 ### Sensitive paths (require maintainer review)
 
