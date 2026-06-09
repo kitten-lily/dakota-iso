@@ -1,25 +1,41 @@
 #!/usr/bin/bash
-# build-live-squashfs.sh <image> <output-squashfs> <output-boot-tar>
+# build-live-squashfs.sh [--oci-image <ref>] <image> <output-squashfs> <output-boot-tar>
 #
 # Exports a container image as a squashfs suitable for dmsquash-live boot,
 # and a companion tar of the boot files (kernel, initramfs, EFI binary) needed
 # to assemble the ISO ESP.
 #
-# The squashfs contains the full live rootfs.  OCI images for offline
-# installation are NOT embedded here — they live in a separate store squashfs
-# (see build-offline-store.sh) mounted at /var/lib/superiso-store.
+# When --oci-image is given, the referenced OCI image is squashed to a single
+# layer and imported into a VFS containers-storage tree at
+# /var/lib/containers/storage inside the squashfs.  This is the offline install
+# store: at boot, fisherman reads local_imgref=containers-storage:<ref> from
+# recipe.json and finds the image there without a network pull.
+#
+# The OCI image must already be present in the local podman/buildah store.
+# skopeo runs inside the live container so the tar-split metadata is written
+# in the JSON format that the live VFS storage driver expects (not the binary
+# format that the build-host containers/storage might emit).
 #
 # This is the plain-bash equivalent of tacklebox's runEnv() + squashfs stage.
 #
 # Usage (must run as root or with sudo):
 #   sudo bash scripts/build-live-squashfs.sh \
+#       [--oci-image ghcr.io/projectbluefin/dakota-nvidia:stable] \
 #       localhost/dakota-nvidia-live:latest \
 #       /out/dakota-nvidia.rootfs.sfs \
 #       /out/dakota-nvidia-boot.tar
 
 set -euo pipefail
 
-IMAGE="${1:?Usage: build-live-squashfs.sh <image> <output-squashfs> <output-boot-tar>}"
+OCI_IMAGE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --oci-image) OCI_IMAGE="${2:?--oci-image requires an image ref}"; shift 2 ;;
+        *) break ;;
+    esac
+done
+
+IMAGE="${1:?Usage: build-live-squashfs.sh [--oci-image <ref>] <image> <output-squashfs> <output-boot-tar>}"
 OUTPUT_SFS="${2:?}"
 OUTPUT_BOOT_TAR="${3:?}"
 
@@ -54,6 +70,58 @@ if [[ "${FS_TYPE}" == "xfs" || "${FS_TYPE}" == "ext4" ]]; then
     fi
 else
     cp -a "${MOUNT}/." "${SFS_ROOT}/"
+fi
+
+# ── Embed offline OCI store (VFS) ─────────────────────────────────────────────
+# When --oci-image is given, squash the payload to a single layer and import it
+# into VFS containers-storage at /var/lib/containers/storage inside the squashfs
+# root.  At boot, fisherman reads local_imgref=containers-storage:<ref> from
+# recipe.json and finds the image there for an offline install.
+if [[ -n "${OCI_IMAGE}" ]]; then
+    echo ">>> [live-squashfs] embedding OCI image ${OCI_IMAGE} into VFS store ..."
+
+    OCI_ARCHIVE="${WORK}/payload.oci.tar"
+    CS_STAGING="${WORK}/vfs-storage"
+    STORAGE_CONF="${WORK}/st.conf"
+
+    mkdir -p "${CS_STAGING}"
+
+    # Chunkified Dakota images have ~120 layers; VFS copies the full filesystem
+    # at each layer.  Squash to 1 layer to keep the store to ~6 GB.
+    echo ">>> [live-squashfs] squashing ${OCI_IMAGE} to single layer ..."
+    SQUASH_CTR="$(buildah from --pull-never "${OCI_IMAGE}")"
+    buildah commit --squash "${SQUASH_CTR}" "oci-archive:${OCI_ARCHIVE}:${OCI_IMAGE}"
+    buildah rm "${SQUASH_CTR}"
+
+    # Write a storage conf for skopeo that uses the staging dir as graphroot.
+    # Paths are container-relative: /vfs-storage is bind-mounted to CS_STAGING.
+    printf '[storage]\ndriver = "vfs"\nrunroot = "/tmp/cs-runroot"\ngraphroot = "/vfs-storage"\n' \
+        > "${STORAGE_CONF}"
+
+    # Run skopeo inside the live container so the VFS tar-split metadata is
+    # written in the JSON format the live ISO expects (build-host containers/
+    # storage may emit a binary format that the live VFS driver cannot read).
+    echo ">>> [live-squashfs] importing squashed OCI into VFS staging dir ..."
+    podman run --rm \
+        --privileged \
+        -v "${OCI_ARCHIVE}:/payload.oci.tar:ro" \
+        -v "${CS_STAGING}:/vfs-storage" \
+        -v "${STORAGE_CONF}:/tmp/st.conf:ro" \
+        "${IMAGE}" \
+        sh -c "mkdir -p /tmp/cs-runroot /var/tmp && \
+               CONTAINERS_STORAGE_CONF=/tmp/st.conf \
+               skopeo copy \
+               oci-archive:/payload.oci.tar:${OCI_IMAGE} \
+               containers-storage:${OCI_IMAGE}"
+
+    rm -f "${OCI_ARCHIVE}" "${STORAGE_CONF}"
+
+    # Bind-mount the populated VFS staging dir at the squashfs root so
+    # mksquashfs captures it at /var/lib/containers/storage.
+    # (The trap already unmounts ${WORK}/squashfs-root/var/lib/containers/storage.)
+    mkdir -p "${SFS_ROOT}/var/lib/containers/storage"
+    mount --bind "${CS_STAGING}" "${SFS_ROOT}/var/lib/containers/storage"
+    echo ">>> [live-squashfs] VFS store size: $(du -sh "${CS_STAGING}" | cut -f1)"
 fi
 
 SFS_LEVEL=3; SFS_BLOCK=131072

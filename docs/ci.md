@@ -176,3 +176,31 @@ QEMU serial (`-serial file:...`) captures ttyS0 output only.
 
 Fix: `StandardOutput=tty` + `TTYPath=/dev/ttyS0` for direct serial writes.
 CI falls back to SSH connectivity check if the marker is absent.
+
+### Offline install failed: VFS containers-storage missing from CI ISOs (2026-06)
+
+**Symptom:** `fisherman: fatal: ... reference "containers-storage:ghcr.io/projectbluefin/dakota-nvidia:stable" does not resolve to an image ID`
+
+**Root cause:** The CI build called `scripts/build-live-squashfs.sh` without `--oci-image`, so
+the live squashfs shipped with an empty `/var/lib/containers/storage`.  The live `recipe.json`
+has `local_imgref=containers-storage:ghcr.io/projectbluefin/dakota-nvidia:stable`, which
+fisherman treats as authoritative.  When the local store is empty, the install fails even if
+the user has a working internet connection (fisherman does not fall back to `docker://`).
+
+**Why local builds were unaffected:** `just iso-sd-boot` always did the squash+skopeo step and
+baked the OCI into the squashfs.  CI diverged from this path and the gap was undetected
+because CI only validated boot, not install.
+
+**Fix:** `scripts/build-live-squashfs.sh` now accepts `--oci-image <ref>`.  When provided it:
+1. Squashes the payload to a single layer via `buildah commit --squash`
+2. Runs `skopeo copy` inside the live container (for JSON tar-split compatibility)
+3. Bind-mounts the populated VFS staging dir at `/var/lib/containers/storage` before mksquashfs
+
+`build-iso.yml` now passes `--oci-image ghcr.io/projectbluefin/dakota-nvidia:stable` and
+asserts the embedded store is non-empty before uploading the ISO to R2.
+
+**Invariant:** The CI-built squashfs **must** contain a populated VFS store at
+`var/lib/containers/storage` with the `dakota-nvidia:stable` image.  The assertion step
+catches any regression before upload.
+
+See issue #78.

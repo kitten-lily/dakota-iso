@@ -424,13 +424,14 @@ mkdir -p /usr/lib/tmpfiles.d
 echo 'f /etc/hostname 0644 - - - dakota-live' > /usr/lib/tmpfiles.d/live-hostname.conf
 
 # ── containers-storage: VFS driver ───────────────────────────────────────────
-# The justfile bakes the OCI image into the main squashfs as VFS containers-
-# storage at /var/lib/containers/storage (skopeo copy via the installer image
-# so tar-split metadata is in JSON format the live ISO expects).
-# Using driver="vfs" lets bootc-installer and fisherman find the embedded image
-# directly without any separate store squashfs or additionalimagestore.
+# The OCI payload image is baked into the squashfs as VFS containers-storage
+# at /var/lib/containers/storage.  For CI builds, scripts/build-live-squashfs.sh
+# does this via --oci-image (squash → skopeo copy inside the installer container).
+# For local builds, the justfile iso-sd-boot recipe does the same.
+# Using driver="vfs" lets fisherman find the embedded image via
+# local_imgref="containers-storage:<ref>" in recipe.json for offline install.
 # (Overlay driver would fail to read VFS-format layers and create a conflicting
-# db.sql file at first boot.)
+# db.sql at first boot.)
 
 mkdir -p /var/lib/containers/storage
 mkdir -p /etc/containers
