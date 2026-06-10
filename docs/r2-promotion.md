@@ -116,6 +116,35 @@ CI uploads two copies of every ISO automatically:
 The dated copy is the source of truth for promotions. Always promote from a dated
 ISO, never from latest (latest may change).
 
+## Rotating R2 credentials
+
+Use this procedure when credentials are compromised or as routine rotation.
+
+**Step 1 — Create new token (Cloudflare dashboard, ~60 seconds):**
+1. `dash.cloudflare.com → R2 → Manage R2 API Tokens → Create token`
+2. Set permissions: `Object Read & Write` on the `testing` bucket
+3. Copy the new `access_key_id` and `secret_access_key`
+
+**Step 2 — Update GitHub secrets:**
+```bash
+gh secret set RCLONE_CONFIG_R2_ACCESS_KEY_ID --repo projectbluefin/dakota-iso
+gh secret set RCLONE_CONFIG_R2_SECRET_ACCESS_KEY --repo projectbluefin/dakota-iso
+# each prompts for the value — paste, Enter, done
+```
+
+**Step 3 — Revoke old token** in the Cloudflare dashboard.
+
+**Step 4 — Verify:**
+```bash
+gh secret list --repo projectbluefin/dakota-iso
+# RCLONE_CONFIG_R2_ACCESS_KEY_ID and RCLONE_CONFIG_R2_SECRET_ACCESS_KEY
+# should show today's timestamp
+```
+
+> Note: `wrangler` cannot create or revoke R2 API tokens — the OAuth token from
+> `wrangler login` does not carry the `api_tokens:edit` scope. Steps 1 and 3
+> require the Cloudflare dashboard. Only step 2 is CLI-automatable.
+
 ---
 
 ## Lessons
