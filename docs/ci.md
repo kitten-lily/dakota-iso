@@ -317,3 +317,30 @@ when present, so CI runs against the debug ISO while R2 gets the production ISO.
 **Why the VFS store must stay:** `ghcr.io/projectbluefin/dakota-nvidia` is private;
 the live env inside QEMU has no GHCR credentials, so fisherman cannot pull from
 network.  The VFS store (embedded in the squashfs) is the only install source.
+
+### flatpak-spawn --host does not forward sandbox env to host process (2026-06)
+
+**Symptom:** fisherman sets `TMPDIR=/mnt/fisherman-target/.fisherman-scratch` and prints
+`# TMPDIR=<scratch>` before running skopeo, but the blob staging file is still created
+at `/var/tmp/container_images_XXXXXXXX` causing ENOSPC.
+
+**Root cause:** The bootc-installer runs inside a Flatpak.  When runner.go calls
+`flatpak-spawn --host skopeo copy ...`, `flatpak-spawn --host` spawns the command in
+the HOST mount namespace but does **not** automatically forward the Flatpak sandbox
+environment to the spawned host process.  skopeo inherits the host's default env
+(no `TMPDIR` set) and uses `/var/tmp` for blob staging.
+
+Setting `cmd.Env` for the `flatpak-spawn` subprocess propagates env vars to
+`flatpak-spawn` itself, but not to the command it spawns on the host.
+
+**Fix (fisherman):** `runner.HostArgsWithEnv` injects critical env vars via
+`--env=KEY=VALUE` flags in the `flatpak-spawn` args:
+```
+flatpak-spawn --host --env=TMPDIR=/scratch --env=CONTAINERS_STORAGE_CONF=... skopeo copy ...
+```
+Released in bootc-installer v2.7.1.
+
+**How to identify:** Look for `# TMPDIR=<path>` in fisherman output followed by
+`write /var/tmp/container_images_...: no space left on device`.  The TMPDIR debug
+print confirms fisherman set the var correctly, but skopeo ignoring it confirms the
+flatpak-spawn env forwarding gap.
