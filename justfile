@@ -1206,13 +1206,27 @@ plain-boot-qemu-live target:
     echo "Waiting for live environment on port {{plain-qemu-ssh-port}}..."
     for i in $(seq 1 60); do
         if grep -q "DAKOTA_LIVE_READY\|debug-ssh-banner" <(sudo cat "{{plain-qemu-serial-live}}" 2>/dev/null); then
-            echo "Live environment ready (serial marker)."
-            break
+            echo "Serial marker seen — polling SSH (sshd lags systemd-ready by ~10-20 s on KVM)..."
+            # The serial marker fires when systemd declares the target reached,
+            # but sshd finishes host-key generation after that and temporarily
+            # resets connections (kex_exchange_identification: read: Connection
+            # reset by peer).  Poll until SSH accepts, then add a small settling
+            # sleep before handing control to plain-install-qemu.
+            for j in $(seq 1 30); do
+                if sshpass -p live ssh $SSH_OPTS liveuser@127.0.0.1 -p {{plain-qemu-ssh-port}} true 2>/dev/null; then
+                    echo "Live environment ready (serial marker + SSH confirmed)."
+                    sleep 3
+                    break 2
+                fi
+                sleep 3
+            done
+            echo "ERROR: serial marker seen but SSH not ready after 90 s" >&2
+            sudo cat "{{plain-qemu-serial-live}}" >&2
+            exit 1
         fi
         if sshpass -p live ssh $SSH_OPTS liveuser@127.0.0.1 -p {{plain-qemu-ssh-port}} true 2>/dev/null; then
-            # sshd accepted — wait a further 15 s for it to fully stabilise
-            # (kex_exchange_identification resets occur for ~10 s after first accept)
-            echo "SSH responded — waiting 15 s for sshd to stabilise..."
+            # SSH up before marker — add settling sleep
+            echo "SSH responded (pre-marker) — waiting 15 s for sshd to stabilise..."
             sleep 15
             break
         fi
