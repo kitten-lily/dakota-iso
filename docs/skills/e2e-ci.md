@@ -162,7 +162,7 @@ If the image grows, this overflows.
 
 ---
 
-## fisherman hostname failure after composefs install (2026-06-13)
+## fisherman hostname failure after composefs install
 
 **Symptom:** E2E 3/4 fails with:
 ```
@@ -193,7 +193,7 @@ fisherman: fatal: writing hostname: finding deployment dir: ostree admin --print
 "E2E full-install status" step re-fails the job to preserve the visible red CI
 status. E2E 4/4 is skipped when 3/4 fails (no installed system to boot).
 
-Upstream issue: https://github.com/tuna-os/fisherman
+Upstream: `tuna-os/fisherman` is archived. File against `tuna-os/tuna-installer` if needed.
 
 **What to do when this fires:**
 - Check that `bootc installation complete` appears in the E2E 3/4 logs
