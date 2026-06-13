@@ -834,7 +834,7 @@ luks-qemu-ssh-port := "2222"
 
 # ── Plain (no-encryption) install test paths ─────────────────────────────────
 # Uses port 2223 and separate socket/disk paths so both tests can run concurrently.
-plain-qemu-disk := "/var/tmp/dakota-plain-install.qcow2"
+plain-qemu-disk := "/var/tmp/dakota-plain-install.img"
 plain-qemu-monitor-live := "/tmp/dakota-plain-qemu-live.sock"
 plain-qemu-monitor-installed := "/tmp/dakota-plain-qemu-installed.sock"
 plain-qemu-serial-live := "/tmp/dakota-plain-qemu-live-serial.log"
@@ -1173,7 +1173,7 @@ plain-boot-qemu-live target:
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-plain-qemu-live-vars.fd; OVMF_VARS=/var/tmp/dakota-plain-qemu-live-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
-    [[ -f "{{plain-qemu-disk}}" ]] || qemu-img create -f qcow2 "{{plain-qemu-disk}}" 64G
+    [[ -f "{{plain-qemu-disk}}" ]] || truncate -s 64G "{{plain-qemu-disk}}"
     sudo rm -f "{{plain-qemu-monitor-live}}" "{{plain-qemu-serial-live}}"
     QEMU_ACCEL="-accel kvm"
     QEMU_PREFIX=""
@@ -1194,7 +1194,7 @@ plain-boot-qemu-live target:
         -drive "if=none,id=iso,file=${ISO},media=cdrom,readonly=on,format=raw" \
         -device virtio-scsi-pci,id=scsi \
         -device scsi-cd,drive=iso \
-        -drive "if=none,id=disk,file={{plain-qemu-disk}},format=qcow2" \
+        -drive "if=none,id=disk,file={{plain-qemu-disk}},format=raw,cache=unsafe" \
         -device virtio-blk-pci,drive=disk \
         -netdev "user,id=net0,hostfwd=tcp::{{plain-qemu-ssh-port}}-:22" \
         -device virtio-net-pci,netdev=net0 \
@@ -1315,7 +1315,7 @@ plain-boot-qemu-installed target:
         -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp 4 $QEMU_ACCEL \
         -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
         -drive "if=pflash,format=raw,file=${OVMF_VARS}" \
-        -drive "if=none,id=disk,file={{plain-qemu-disk}},format=qcow2" \
+        -drive "if=none,id=disk,file={{plain-qemu-disk}},format=raw,cache=unsafe" \
         -device virtio-blk-pci,drive=disk \
         -netdev user,id=net0 \
         -device virtio-net-pci,netdev=net0 \

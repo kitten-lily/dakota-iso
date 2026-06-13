@@ -193,7 +193,7 @@ jobs:
       # A failure here blocks R2 upload — broken ISOs do not ship.
       - name: Plain install E2E (composefs, no encryption, 4096 MiB)
         id: plain_e2e
-        timeout-minutes: 60
+        timeout-minutes: 90
         run: |
           sudo env PATH="$PATH" just qemu-mem=4096 installer_channel=stable plain-test-qemu dakota
 
