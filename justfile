@@ -1147,22 +1147,22 @@ plain-enospc-gate target:
         "${INSTALL_IMAGE}" > "${RECIPE_TMP}"
     $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/enospc-recipe.json
     echo "Running fisherman (watching for OCI export completion)..."
-    # Run fisherman in background; tail its output and exit the moment
-    # 'OCI export complete' appears — that line proves skopeo finished
-    # without ENOSPC.  The full bootc install continues in the background
-    # but we don't wait for it.
-    $SSH 'sudo /usr/local/bin/fisherman /tmp/enospc-recipe.json' | \
-        while IFS= read -r line; do
-            echo "[fisherman] $line"
-            if echo "$line" | grep -q 'OCI export complete'; then
-                echo ">>> ENOSPC gate PASSED (OCI export complete without ENOSPC)"
-                exit 0
-            fi
-            if echo "$line" | grep -qE '(ENOSPC|no space left|fatal:|error:)'; then
-                echo ">>> ENOSPC gate FAILED: $line" >&2
-                exit 1
-            fi
-        done
+    # Run fisherman via process substitution (not a pipe) so that exit 0/1
+    # inside the while loop exits the *outer* script rather than just the
+    # pipe subshell.  With a pipe and set -o pipefail, sshpass returns 255
+    # on the broken-pipe when the while subshell exits, causing a spurious
+    # failure even though the ENOSPC gate passed.
+    while IFS= read -r line; do
+        echo "[fisherman] $line"
+        if echo "$line" | grep -q 'OCI export complete'; then
+            echo ">>> ENOSPC gate PASSED (OCI export complete without ENOSPC)"
+            exit 0
+        fi
+        if echo "$line" | grep -qE '(ENOSPC|no space left|fatal:|error:)'; then
+            echo ">>> ENOSPC gate FAILED: $line" >&2
+            exit 1
+        fi
+    done < <($SSH 'sudo /usr/local/bin/fisherman /tmp/enospc-recipe.json' 2>&1)
     echo ">>> fisherman exited — OCI export completed successfully"
 
 
