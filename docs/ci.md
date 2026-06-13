@@ -344,3 +344,23 @@ Released in bootc-installer v2.7.1.
 `write /var/tmp/container_images_...: no space left on device`.  The TMPDIR debug
 print confirms fisherman set the var correctly, but skopeo ignoring it confirms the
 flatpak-spawn env forwarding gap.
+
+### E2E test split into 4 named steps with individual timeouts (2026-06)
+
+**Why:** The original single `plain-test-qemu` step had one monolithic timeout (90 min).
+When it expired you had no idea which of the four stages (boot-live, install,
+boot-installed, verify) was the bottleneck.
+
+**New structure:**
+
+| Step | Timeout | RAM | Purpose |
+|---|---|---|---|
+| `E2E 1/4 — Boot live ISO` | 10 min | 4 GiB | Live env ready + SSH confirmed |
+| `E2E 2/4 — Install composefs` | 30 min | 4 GiB | ENOSPC regression gate (tight tmpfs) |
+| `E2E 3/4 — Boot installed disk` | 10 min | 8 GiB | Installed system POSTs correctly |
+| `E2E 4/4 — Verify Graphical target` | 10 min | 8 GiB | systemd Graphical target reached |
+
+Total worst-case ceiling: **60 min** (vs. 90 min monolithic), with precise attribution.
+
+Gate 1+2 use 4 GiB to keep the overlay tmpfs tight (~2 GiB) for ENOSPC testing.
+Gate 2 switches to 8 GiB for realistic boot performance.
