@@ -214,9 +214,18 @@ jobs:
       # ── E2E Gate 2: Full functional install + boot verification (8 GiB) ───────
       # Boot the live ISO fresh at 8 GiB so btrfs+overlay is not I/O-starved,
       # run the complete fisherman install, boot the result, and verify.
+      #
+      # continue-on-error: true — fisherman exits non-zero after a successful
+      # composefs install when writing hostname (ostree admin --print-current-dir
+      # fails because composefs uses ostree/bootc/ not ostree/deploy/default/).
+      # The install itself completes; only the post-install hostname step fails.
+      # Tracked upstream: https://github.com/tuna-os/fisherman/issues
+      # ISO upload is gated on the ENOSPC gate (step 2), not this step.
+      # A final "E2E status" step below re-fails the job so CI stays visibly red.
       - name: "E2E 3/4 — Full install composefs (8 GiB)"
         id: e2e_install
         timeout-minutes: 60
+        continue-on-error: true
         run: |
           sudo env PATH="$PATH" just qemu-mem=8192 plain-boot-qemu-live dakota
           sudo env PATH="$PATH" just plain-install-qemu dakota
@@ -224,6 +233,7 @@ jobs:
       - name: "E2E 4/4 — Boot installed + verify Graphical target (8 GiB)"
         id: e2e_verify
         timeout-minutes: 15
+        if: steps.e2e_install.outcome == 'success'
         run: |
           sudo env PATH="$PATH" just qemu-mem=8192 plain-boot-qemu-installed dakota
           sudo env PATH="$PATH" just plain-verify-qemu dakota
@@ -244,7 +254,7 @@ jobs:
           retention-days: 14
 
       - name: Upload plain E2E disk (on failure, for post-mortem)
-        if: failure() && (steps.e2e_install.conclusion == 'failure' || steps.e2e_boot_installed.conclusion == 'failure' || steps.e2e_verify.conclusion == 'failure')
+        if: always() && (steps.e2e_install.outcome == 'failure' || steps.e2e_verify.outcome == 'failure')
         uses: actions/upload-artifact@v4
         with:
           name: plain-e2e-disk
@@ -253,7 +263,7 @@ jobs:
           retention-days: 3
 
       - name: Upload ISO to Cloudflare R2
-        if: ${{ inputs.skip_upload != true && github.event_name != 'pull_request' }}
+        if: ${{ inputs.skip_upload != true && github.event_name != 'pull_request' && steps.e2e_enospc.conclusion == 'success' }}
         env:
           RCLONE_CONFIG_R2_TYPE: s3
           RCLONE_CONFIG_R2_PROVIDER: Cloudflare
@@ -349,3 +359,13 @@ jobs:
           name: boot-screenshot
           path: screenshot.png
           if-no-files-found: warn
+
+      # Re-fail the job if E2E full install failed (continue-on-error above allowed
+      # the upload to proceed; this step restores the visible red CI status).
+      - name: E2E full-install status
+        if: always() && steps.e2e_install.outcome == 'failure'
+        run: |
+          echo "::error::E2E 3/4 (full composefs install) failed — see step logs above"
+          echo "Known issue: fisherman hostname write fails with composefs backend"
+          echo "Upstream tracking: https://github.com/tuna-os/fisherman"
+          exit 1

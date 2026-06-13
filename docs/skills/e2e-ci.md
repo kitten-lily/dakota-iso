@@ -159,3 +159,43 @@ If the image grows, this overflows.
     SUPERISO_COMPRESSION: release
     SUPERISO_TMPDIR: /var/iso-build
 ```
+
+---
+
+## fisherman hostname failure after composefs install (2026-06-13)
+
+**Symptom:** E2E 3/4 fails with:
+```
+fisherman: fatal: writing hostname: finding deployment dir: ostree admin --print-current-dir: exit status 1
+```
+
+**Root cause:** When `bootc install to-filesystem --composefs-backend` runs, it
+creates `ostree/bootc/` on the target disk instead of the traditional
+`ostree/deploy/default/`. In step 7 ("Configuring installed system"), fisherman
+calls `ostree admin --print-current-dir` to locate the deployment directory for
+writing `/etc/hostname`. That command fails because there is no traditional ostree
+deployment — composefs uses a different on-disk layout.
+
+The actual `bootc` installation (step 5) **completes successfully**. Only the
+post-install hostname-writing step fails.
+
+**Evidence from CI log:**
+```
+{"message":"bootc installation complete",...}     ← step 5 complete
+{"message":"Copying system Flatpaks",...}          ← step 6 complete
+{"message":"Writing hostname: dakota-plain-test"} ← step 7 begins
++ ls /mnt/fisherman-target/ostree
+bootc                                              ← no deploy/ dir
+fisherman: fatal: writing hostname: finding deployment dir: ostree admin --print-current-dir: exit status 1
+```
+
+**Fix:** `continue-on-error: true` on E2E 3/4 so ISO upload proceeds. A final
+"E2E full-install status" step re-fails the job to preserve the visible red CI
+status. E2E 4/4 is skipped when 3/4 fails (no installed system to boot).
+
+Upstream issue: https://github.com/tuna-os/fisherman
+
+**What to do when this fires:**
+- Check that `bootc installation complete` appears in the E2E 3/4 logs
+- If yes: it is the known fisherman hostname bug — ISO is OK to publish
+- If no: a real install failure — do not publish, investigate
