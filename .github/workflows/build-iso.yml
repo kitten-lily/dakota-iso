@@ -1,15 +1,8 @@
 name: Build and Publish Dakota Live ISO
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'live/**'
-      - 'scripts/**'
-      - 'justfile'
-      - '.github/workflows/build-iso.yml'
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 3 1 * *'
   workflow_dispatch:
     inputs:
       skip_upload:
