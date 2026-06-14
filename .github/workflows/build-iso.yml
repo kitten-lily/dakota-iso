@@ -276,7 +276,7 @@ jobs:
           sudo apt-get install -y rclone -qq
           ISO="${{ steps.iso.outputs.path }}"
           DATED="${{ steps.iso.outputs.dated }}"
-          rclone copyto --log-level INFO --checksum --s3-no-check-bucket \
+          rclone copyto --log-level INFO --s3-no-check-bucket \
             "$ISO" "R2:testing/${DATED}"
           rclone copyto --log-level INFO --s3-no-check-bucket \
             "$ISO" "R2:testing/dakota-live-latest.iso"
