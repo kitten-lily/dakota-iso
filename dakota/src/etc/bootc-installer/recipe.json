@@ -1,6 +1,6 @@
 {
   "log_file": "/var/log/bootc-installer.log",
-  "distro_name": "Dakota",
+  "distro_name": "Bluefin",
   "distro_logo": "resource:///org/bootcinstaller/Installer/images/dakota.png",
   "imgref": "ghcr.io/projectbluefin/dakota:latest",
   "local_imgref": "containers-storage:ghcr.io/projectbluefin/dakota:latest",
@@ -11,7 +11,7 @@
   "tour": {
     "welcome": {
       "image": "/run/host/usr/share/bootc-installer/images/dakotaraptor.png",
-      "title": "Welcome to Dakota",
+      "title": "Welcome to Bluefin",
       "description": "This is an Alpha of the all new Bluefin. Thanks for volunteering to help!"
     },
     "features": {
