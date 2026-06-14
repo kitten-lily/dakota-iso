@@ -60,19 +60,15 @@ rclone copyto -v \
 
 | Name | Source | Notes |
 |---|---|---|
-| `dakota-live-alpha2.iso` | `20260508-3059a71` | Last build with fisherman v0.1.0 before v0.2.0 regression |
-| `dakota-nvidia-live-alpha2.iso` | `20260508-3059a71` | Nvidia variant, same build |
-| `dakota-live-alpha3.iso` | `20260614-9939dd7` | First build with fixed installer (fisherman v0.2.1, bootc-installer v2.7.4) |
-| `dakota-live-latest.iso` | Latest CI build | Auto-updated by `build-iso.yml` |
-| `dakota-nvidia-live-latest.iso` | Latest CI build | Auto-updated by `build-iso.yml` |
+| `dakota-live-alpha2.iso` | `20260614-7ef17bd` | Rebuilt with bootc-installer v2.7.4 (ENOSPC + composefs hostname fixes) |
+| `dakota-live-alpha3.iso` | `20260614-9939dd7` | First build with fixed installer (fisherman v0.2.1, bootc-installer v2.7.3) |
+| `dakota-live-latest.iso` | Latest CI build | Auto-updated by monthly `build-iso.yml` |
 
 ## Public URLs
 
 ```
 https://projectbluefin.dev/dakota-live-latest.iso
 https://projectbluefin.dev/dakota-live-latest.iso-CHECKSUM
-https://projectbluefin.dev/dakota-nvidia-live-latest.iso
-https://projectbluefin.dev/dakota-nvidia-live-latest.iso-CHECKSUM
 ```
 
 Named releases follow the same pattern:
@@ -112,7 +108,7 @@ podman run --rm \
 
 CI uploads two copies of every ISO automatically:
 1. Dated: `dakota-live-YYYYMMDD-<sha>.iso` — permanent, never overwritten
-2. Latest: `dakota-live-latest.iso` — overwritten on every successful build
+2. Latest: `dakota-live-latest.iso` — overwritten on every successful monthly build
 
 The dated copy is the source of truth for promotions. Always promote from a dated
 ISO, never from latest (latest may change).
@@ -171,3 +167,34 @@ account ID as a hostname. Do not hardcode it in documentation — the format is
 required by rclone's S3 provider and cannot be shortened to a path-based form.
 When setting up a new rclone config, prompt the user to fill in their account ID
 rather than copying a pre-filled value from docs.
+
+### There is only one ISO — delete ghost nvidia-live-* files if they reappear (2026-06)
+
+The CI produces a single unified ISO (`dakota-live.iso`) built from the
+`dakota-nvidia:stable` image. There is no separate nvidia variant.
+
+At one point an older CI layout uploaded `dakota-nvidia-live-*.iso` files.
+Those were never updated after the unified ISO landed and became permanently
+stale ghost files on R2. They were deleted in June 2026.
+
+If `dakota-nvidia-live-*` files reappear in R2 (e.g. from an old workflow
+branch being re-run), delete them:
+```bash
+for f in dakota-nvidia-live-latest.iso dakota-nvidia-live-latest.iso-CHECKSUM \
+         dakota-nvidia-live-alpha2.iso  dakota-nvidia-live-alpha2.iso-CHECKSUM; do
+  rclone deletefile R2:testing/$f
+done
+```
+Do not promote them or reference them in docs.
+
+### Overwriting a named release — promote from a dated ISO, not from latest (2026-06)
+
+When a named release (e.g. alpha2) needs to be replaced, always copy from the
+dated ISO — never from `dakota-live-latest.iso`. Latest may be updated by CI
+between your copy commands, producing an inconsistent ISO/checksum pair.
+
+```bash
+# Correct: source is pinned dated build
+rclone copyto -v R2:testing/dakota-live-YYYYMMDD-SHA.iso R2:testing/dakota-live-alpha2.iso
+rclone copyto -v R2:testing/dakota-live-YYYYMMDD-SHA.iso-CHECKSUM R2:testing/dakota-live-alpha2.iso-CHECKSUM
+```

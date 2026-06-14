@@ -6,17 +6,18 @@ How the GitHub Actions workflows build, test, and publish Dakota ISOs.
 
 | Workflow | File | Trigger |
 |---|---|---|
-| Build & Publish | `build-iso.yml` | push to main, daily 03:00 UTC, `workflow_dispatch` |
+| Build & Publish | `build-iso.yml` | 1st of month 03:00 UTC, `workflow_dispatch` |
 | LUKS E2E Test | `test-luks-install.yml` | PRs to main, weekly Mon 04:00 UTC, `workflow_dispatch` |
 | ShellCheck Lint | `lint.yml` | PRs to main, push to main |
 | Python Unit Tests | `test.yml` | PRs to main, push to main |
 
 ## build-iso.yml
 
+**Triggers:** 1st of each month 03:00 UTC, `workflow_dispatch`  
 **Job:** `build-and-publish` (single job, no matrix)
 **Runner:** `ubuntu-24.04`  
-**Runs as:** root via `sudo`
-**Path triggers:** `live/**`, `scripts/**`, `.github/workflows/build-iso.yml`
+**Runs as:** root via `sudo`  
+~~**Path triggers:** `live/**`, `scripts/**`, `.github/workflows/build-iso.yml`~~ — removed; see lessons.
 
 ### Pipeline steps
 
@@ -46,6 +47,9 @@ code path fails with:
 open /var/tmp/oci-cache/index.json: no such file or directory
 ```
 Production CI must stay on `installer_channel=stable` until the regression is fixed.
+
+The stable channel resolves to `releases/latest/download` (the most recent non-prerelease tag).
+As of 2026-06-14 this is **v2.7.4**.
 
 ### Disk layout in CI
 
@@ -364,3 +368,18 @@ Total worst-case ceiling: **60 min** (vs. 90 min monolithic), with precise attri
 
 Gate 1+2 use 4 GiB to keep the overlay tmpfs tight (~2 GiB) for ENOSPC testing.
 Gate 2 switches to 8 GiB for realistic boot performance.
+
+### Build trigger reduced to monthly + on-demand to cap R2 bucket growth (2026-06)
+
+The original `build-iso.yml` ran on every push to `live/**`/`scripts/**` and
+on a daily cron. Each successful run deposits a permanent dated ISO (~4.3 GB)
+into R2, so daily builds produce ~60 ISOs/month of unbounded storage growth.
+
+**Fix:** push triggers and the daily cron were removed. The workflow now runs:
+- `schedule: cron '0 3 1 * *'` — 1st of each month at 03:00 UTC
+- `workflow_dispatch` — on demand for releases, hotfixes, or manual triggers
+
+This limits automatic R2 growth to ~2 objects/month (dated + latest overwrite).
+For mid-cycle releases (e.g. a new named alpha), trigger manually and then
+promote the dated ISO to the named slot via `rclone copyto` as documented in
+`docs/r2-promotion.md`.
