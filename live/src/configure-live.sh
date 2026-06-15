@@ -124,11 +124,13 @@ INSTALLER_APP_ID="org.bootcinstaller.Installer"
 
 # Override the installer flatpak's desktop entry so it appears as
 # "Dakota Installer" with the dakota icon instead of "bootc Installer".
-# /usr/local/share/applications/ is earlier in XDG_DATA_DIRS than the flatpak
-# export path, so this file takes precedence without modifying the flatpak.
-mkdir -p /usr/local/share/applications
+# /usr/share/applications/ takes precedence over flatpak exports in XDG_DATA_DIRS.
+# Use /usr/share instead of /usr/local to avoid issues with /usr/local being a
+# dangling symlink on Fedora Silverblue-based images (e.g. bluefin) where
+# /usr/local -> /var/usrlocal and /var/usrlocal doesn't exist at build time.
+mkdir -p /usr/share/applications
 INSTALLER_DESKTOP_ID="${INSTALLER_APP_ID}.desktop"
-cat > "/usr/local/share/applications/${INSTALLER_DESKTOP_ID}" << DESKTOPEOF
+cat > "/usr/share/applications/${INSTALLER_DESKTOP_ID}" << DESKTOPEOF
 [Desktop Entry]
 Name=Dakota Installer
 Exec=/usr/bin/flatpak run --branch=master --arch=x86_64 --command=bootc-installer ${INSTALLER_APP_ID}
@@ -396,8 +398,15 @@ DTEOF
 # fisherman symlink — installer calls /usr/local/bin/fisherman via pkexec
 INSTALLER_APP_DIR=$(find /var/lib/flatpak/app/${INSTALLER_APP_ID} -name fisherman -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)
 if [ -n "$INSTALLER_APP_DIR" ]; then
-    mkdir -p /usr/local/bin
-    ln -sf "${INSTALLER_APP_DIR}/fisherman" /usr/local/bin/fisherman
+    # Resolve /usr/local symlink if dangling (Fedora Silverblue: /usr/local -> /var/usrlocal)
+    USR_LOCAL_BIN=/usr/local/bin
+    if [[ -L /usr/local ]] && [[ ! -d /usr/local ]]; then
+        USR_LOCAL_BIN="$(readlink /usr/local)/bin"
+        mkdir -p "$USR_LOCAL_BIN"
+    else
+        mkdir -p /usr/local/bin
+    fi
+    ln -sf "${INSTALLER_APP_DIR}/fisherman" "${USR_LOCAL_BIN}/fisherman"
 fi
 
 # Policy file: write it directly so we're not dependent on Flatpak search.
