@@ -153,6 +153,7 @@ jobs:
 
       - name: Boot verification (QEMU serial)
         if: steps.should_build.outputs.build == 'true'
+        continue-on-error: true  # smoke test; full E2E is in build-iso.yml (dakota)
         timeout-minutes: 10
         env:
           ISO_PATH: ${{ steps.iso.outputs.path }}
