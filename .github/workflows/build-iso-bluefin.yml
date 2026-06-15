@@ -30,13 +30,15 @@ jobs:
       matrix:
         include:
           - variant: bluefin
-            payload_image: ghcr.io/projectbluefin/bluefin-nvidia-open:stable
+            payload_image: ghcr.io/ublue-os/bluefin-nvidia-open:stable
             live_target: bluefin-nvidia-open
+            registry: ublue-os
             tag: stable
             iso_name: bluefin-live
           - variant: bluefin-lts
             payload_image: ghcr.io/projectbluefin/bluefin-lts-nvidia-open:lts
             live_target: bluefin-lts-nvidia-open
+            registry: projectbluefin
             tag: lts
             iso_name: bluefin-lts-live
 
@@ -86,6 +88,7 @@ jobs:
             --layers \
             --build-arg TARGET=${{ matrix.live_target }} \
             --build-arg TAG=${{ matrix.tag }} \
+            --build-arg REGISTRY=${{ matrix.registry }} \
             --build-arg INSTALLER_CHANNEL=stable \
             -t localhost/${{ matrix.live_target }}-live:latest \
             ./live
