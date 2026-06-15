@@ -18,9 +18,11 @@
 # grafting is needed; only the initramfs.img output crosses the stage boundary.
 
 ARG TARGET=dakota-nvidia
+# TAG selects the image tag. Defaults to 'stable'; use 'lts' for LTS variants.
+ARG TAG=stable
 
 # ── Stage 1: Reference image (kernel modules source) ─────────────────────────
-FROM ghcr.io/projectbluefin/${TARGET}:stable AS ref
+FROM ghcr.io/projectbluefin/${TARGET}:${TAG} AS ref
 
 # ── Stage 2: Debian — builds the dmsquash-live initramfs ─────────────────────
 FROM debian:sid AS initramfs-builder
@@ -44,9 +46,11 @@ RUN set -ex; \
 
 # ── Stage 3: Final live image ─────────────────────────────────────────────────
 ARG TARGET=dakota-nvidia
-FROM ghcr.io/projectbluefin/${TARGET}:stable
+ARG TAG=stable
+FROM ghcr.io/projectbluefin/${TARGET}:${TAG}
 
 ARG TARGET=dakota-nvidia
+ARG TAG=stable
 ARG INSTALLER_CHANNEL=stable
 ARG DEBUG=0
 ENV TARGET=${TARGET} INSTALLER_CHANNEL=${INSTALLER_CHANNEL} DEBUG=${DEBUG}

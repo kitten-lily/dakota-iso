@@ -1,0 +1,19 @@
+{
+  "default_image": "ghcr.io/projectbluefin/bluefin:stable",
+  "fallback_flatpaks": [],
+  "images": [
+    {
+      "name": "Bluefin",
+      "imgref": "ghcr.io/projectbluefin/bluefin:stable",
+      "nvidia_imgref": "ghcr.io/projectbluefin/bluefin-nvidia-open:stable",
+      "desc": "Bluefin — a GNOME workstation for cloud-native developers",
+      "icon": "resource:///org/bootcinstaller/Installer/images/bluefin.png",
+      "bootloader": "grub",
+      "filesystem": "xfs",
+      "composefs": false,
+      "needs_user_creation": true,
+      "flatpak_var_path": "var/lib/flatpak",
+      "filesystems": ["xfs", "btrfs"]
+    }
+  ]
+}

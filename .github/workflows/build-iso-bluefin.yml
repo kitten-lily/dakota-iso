@@ -1,0 +1,224 @@
+name: Build and Publish Bluefin Live ISOs
+
+on:
+  schedule:
+    - cron: '0 5 1 * *'   # 1st of month, 05:00 UTC (after dakota at 03:00)
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Which variant to build (bluefin, bluefin-lts, or all)'
+        required: false
+        default: all
+        type: string
+      skip_upload:
+        description: 'Build ISO but skip uploading to R2 (dry run)'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-and-publish:
+    name: Build ${{ matrix.variant }} Live ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: bluefin
+            payload_image: ghcr.io/projectbluefin/bluefin-nvidia-open:stable
+            live_target: bluefin-nvidia-open
+            tag: stable
+            iso_name: bluefin-live
+          - variant: bluefin-lts
+            payload_image: ghcr.io/projectbluefin/bluefin-lts-nvidia-open:lts
+            live_target: bluefin-lts-nvidia-open
+            tag: lts
+            iso_name: bluefin-lts-live
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Skip if workflow_dispatch selected a specific variant that doesn't match
+      - name: Check if this variant should build
+        id: should_build
+        run: |
+          INPUT="${{ inputs.variant }}"
+          if [[ -z "$INPUT" || "$INPUT" == "all" || "$INPUT" == "${{ matrix.variant }}" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space
+        if: steps.should_build.outputs.build == 'true'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+
+      - name: Install dependencies
+        if: steps.should_build.outputs.build == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y podman buildah skopeo \
+            mtools xorriso squashfs-tools dosfstools isomd5sum
+
+      - name: Log in to GHCR
+        if: steps.should_build.outputs.build == 'true'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            sudo podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Pull offline payload image
+        if: steps.should_build.outputs.build == 'true'
+        run: sudo podman pull ${{ matrix.payload_image }}
+
+      - name: Build live container
+        if: steps.should_build.outputs.build == 'true'
+        run: |
+          sudo podman build \
+            --cap-add sys_admin --security-opt label=disable \
+            --layers \
+            --build-arg TARGET=${{ matrix.live_target }} \
+            --build-arg TAG=${{ matrix.tag }} \
+            --build-arg INSTALLER_CHANNEL=stable \
+            -t localhost/${{ matrix.live_target }}-live:latest \
+            ./live
+
+      - name: Build live squashfs + boot tar
+        if: steps.should_build.outputs.build == 'true'
+        env:
+          SUPERISO_COMPRESSION: release
+          SUPERISO_TMPDIR: /var/iso-build
+        run: |
+          sudo mkdir -p /var/iso-build
+          sudo -E bash scripts/build-live-squashfs.sh \
+            --oci-image ${{ matrix.payload_image }} \
+            localhost/${{ matrix.live_target }}-live:latest \
+            /var/iso-build/${{ matrix.live_target }}.rootfs.sfs \
+            /var/iso-build/${{ matrix.live_target }}-boot.tar
+
+      - name: Verify offline OCI store is embedded
+        if: steps.should_build.outputs.build == 'true'
+        run: |
+          COUNT=$(sudo unsquashfs -lc /var/iso-build/${{ matrix.live_target }}.rootfs.sfs \
+            var/lib/containers/storage/vfs-images 2>/dev/null | \
+            grep -c "squashfs-root" || true)
+          if [[ "${COUNT}" -eq 0 ]]; then
+            echo "ERROR: VFS containers-storage missing vfs-images — OCI embedding failed" >&2
+            exit 1
+          fi
+          echo ">>> OCI store assertion passed (vfs-images has ${COUNT} entries)"
+
+      - name: Assemble ISO
+        if: steps.should_build.outputs.build == 'true'
+        run: |
+          sudo bash live/src/build-iso.sh \
+            /var/iso-build/${{ matrix.live_target }}-boot.tar \
+            /var/iso-build/${{ matrix.live_target }}.rootfs.sfs \
+            /var/iso-build/${{ matrix.iso_name }}.iso
+          mkdir -p output
+          sudo cp /var/iso-build/${{ matrix.iso_name }}.iso output/
+          sudo chown -R "$USER:$(id -gn)" output/
+
+      - name: Compute ISO name
+        id: iso
+        if: steps.should_build.outputs.build == 'true'
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "dated=${{ matrix.iso_name }}-${DATE}-${SHA}.iso" >> "$GITHUB_OUTPUT"
+          echo "path=output/${{ matrix.iso_name }}.iso" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SHA256 checksum
+        id: checksum
+        if: steps.should_build.outputs.build == 'true'
+        run: |
+          ISO="${{ steps.iso.outputs.path }}"
+          DATED="${{ steps.iso.outputs.dated }}"
+          CHECKSUM_PATH="output/${DATED}-CHECKSUM"
+          LATEST_CHECKSUM_PATH="output/${{ matrix.iso_name }}-latest.iso-CHECKSUM"
+          sha256sum "$ISO" | sed "s|${ISO}|${DATED}|" | tee "$CHECKSUM_PATH"
+          sha256sum "$ISO" | sed "s|${ISO}|${{ matrix.iso_name }}-latest.iso|" > "$LATEST_CHECKSUM_PATH"
+          echo "path=${CHECKSUM_PATH}" >> "$GITHUB_OUTPUT"
+          echo "latest_path=${LATEST_CHECKSUM_PATH}" >> "$GITHUB_OUTPUT"
+
+      - name: Boot verification (QEMU serial)
+        if: steps.should_build.outputs.build == 'true'
+        timeout-minutes: 10
+        env:
+          ISO_PATH: ${{ steps.iso.outputs.path }}
+        run: |
+          sudo apt-get install -y qemu-system-x86 ovmf socat -qq
+          OVMF_CODE=$(find /usr/share/OVMF /usr/share/ovmf -name 'OVMF_CODE*.fd' 2>/dev/null | head -1)
+          OVMF_VARS=$(find /usr/share/OVMF /usr/share/ovmf -name 'OVMF_VARS*.fd' 2>/dev/null | head -1)
+          [[ -z "$OVMF_CODE" ]] && { echo "OVMF not found"; exit 1; }
+          cp "$OVMF_VARS" /tmp/efi-vars.fd
+          truncate -s 8G /tmp/install.img
+          qemu-system-x86_64 \
+            -machine q35 -cpu qemu64 -m 4096 -smp 2 \
+            -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
+            -drive "if=pflash,format=raw,file=/tmp/efi-vars.fd" \
+            -drive "if=none,id=iso,file=${ISO_PATH},media=cdrom,readonly=on,format=raw" \
+            -device scsi-cd,drive=iso \
+            -drive "if=none,id=disk,file=/tmp/install.img,format=raw" \
+            -device virtio-blk-pci,drive=disk \
+            -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+            -serial file:/tmp/boot.log \
+            -display none -daemonize
+          for _ in $(seq 1 60); do
+            sleep 5
+            if grep -qE 'LIVE_READY|debug-ssh-banner' /tmp/boot.log 2>/dev/null; then
+              echo ">>> Live environment booted successfully"
+              pkill -f qemu-system-x86_64 2>/dev/null || true
+              exit 0
+            fi
+          done
+          echo "ERROR: live env did not signal ready within 5 minutes" >&2
+          tail -20 /tmp/boot.log
+          pkill -f qemu-system-x86_64 2>/dev/null || true
+          exit 1
+
+      - name: Upload ISO artifact
+        if: steps.should_build.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.iso.outputs.dated }}
+          path: |
+            ${{ steps.iso.outputs.path }}
+            ${{ steps.checksum.outputs.path }}
+          retention-days: 7
+
+      - name: Upload ISO to Cloudflare R2
+        if: >
+          steps.should_build.outputs.build == 'true' &&
+          inputs.skip_upload != true &&
+          github.event_name != 'pull_request'
+        env:
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_REGION: auto
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          RCLONE_NO_CHECK_BUCKET: "true"
+        run: |
+          sudo apt-get install -y rclone -qq
+          ISO="${{ steps.iso.outputs.path }}"
+          DATED="${{ steps.iso.outputs.dated }}"
+          LATEST="${{ matrix.iso_name }}-latest.iso"
+          LATEST_CHECKSUM="${{ matrix.iso_name }}-latest.iso-CHECKSUM"
+
+          # Upload dated ISO + checksum
+          rclone copyto -v "$ISO" "R2:testing/${DATED}"
+          rclone copyto -v "${{ steps.checksum.outputs.path }}" "R2:testing/${DATED}-CHECKSUM"
+
+          # Update latest pointers
+          rclone copyto -v "R2:testing/${DATED}" "R2:testing/${LATEST}"
+          rclone copyto -v "R2:testing/${DATED}-CHECKSUM" "R2:testing/${LATEST_CHECKSUM}"
+          echo "Published: ${DATED} → ${LATEST}"

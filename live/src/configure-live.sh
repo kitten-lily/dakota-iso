@@ -272,21 +272,43 @@ install -Dm644 "$SCRIPT_DIR/images/dakotaraptor.png" /usr/share/bootc-installer/
 # containers-storage and therefore available for offline install.  The live
 # environment is always the NVIDIA variant (safe for all hardware).
 #
-# imgref is set to the BASE (non-nvidia) image so that bootc-installer's
-# nvidia_imgref auto-detection (processor.py) can match the images.json entry:
-#   - NVIDIA GPU present  → installs dakota-nvidia:stable, tracks dakota-nvidia:stable
-#   - No NVIDIA GPU       → installs from ISO (dakota-nvidia:stable offline),
-#                           but targetImgref = dakota:stable so first bootc upgrade
-#                           rebases to the lighter non-nvidia variant automatically
-#
-# local_imgref overrides the install SOURCE to the offline store image (nvidia),
-# while imgref/targetImgref control what tag is written into the installed system.
+# Per-variant config is read from /tmp/src/<TARGET>/ (bind-mounted from the
+# build context at container build time) when present, with sensible defaults
+# for dakota.  Each variant directory may contain:
+#   base_imgref      — base (non-nvidia) image ref written as imgref
+#   nvidia_imgref    — nvidia image ref used as local_imgref offline store
+#   bootloader       — "systemd" (default) or "grub"
+#   composefs        — "true" (default) or "false"
+#   flatpak_var_path — flatpak data path inside target (default: state/os/default/var/lib/flatpak)
+#   images_json      — variant-specific images.json (optional, overrides live/src/etc/bootc-installer/images.json)
 TARGET="${TARGET:-dakota-nvidia}"
-BASE_IMGREF="ghcr.io/projectbluefin/dakota:stable"
-NVIDIA_IMGREF="ghcr.io/projectbluefin/dakota-nvidia:stable"
+
+# Derive variant name by stripping the -nvidia/-nvidia-open suffix
+VARIANT=$(echo "$TARGET" | sed 's/-nvidia-open$//;s/-nvidia$//')
+VARIANT_DIR="/tmp/src/${VARIANT}"
+
+# Read per-variant config with defaults
+if [[ -f "$VARIANT_DIR/base_imgref" ]]; then
+    BASE_IMGREF=$(cat "$VARIANT_DIR/base_imgref")
+else
+    BASE_IMGREF="ghcr.io/projectbluefin/dakota:stable"
+fi
+if [[ -f "$VARIANT_DIR/nvidia_imgref" ]]; then
+    NVIDIA_IMGREF=$(cat "$VARIANT_DIR/nvidia_imgref")
+else
+    NVIDIA_IMGREF="ghcr.io/projectbluefin/dakota-nvidia:stable"
+fi
+BOOTLOADER=$(cat "$VARIANT_DIR/bootloader" 2>/dev/null || echo "systemd")
+COMPOSEFS=$(cat "$VARIANT_DIR/composefs" 2>/dev/null || echo "true")
+FLATPAK_VAR_PATH=$(cat "$VARIANT_DIR/flatpak_var_path" 2>/dev/null || echo "state/os/default/var/lib/flatpak")
 
 mkdir -p /etc/bootc-installer
-cp "$SCRIPT_DIR/etc/bootc-installer/images.json" /etc/bootc-installer/images.json
+# Use variant-specific images.json if present, otherwise use the shared one.
+if [[ -f "$VARIANT_DIR/images.json" ]]; then
+    cp "$VARIANT_DIR/images.json" /etc/bootc-installer/images.json
+else
+    cp "$SCRIPT_DIR/etc/bootc-installer/images.json" /etc/bootc-installer/images.json
+fi
 
 # Generate recipe.json with the correct imgref/local_imgref for this variant.
 # All other fields (branding, tour, steps) are identical across variants.
@@ -300,6 +322,9 @@ with open("$SCRIPT_DIR/etc/bootc-installer/recipe.json") as f:
 # local_imgref = nvidia image — overrides install source to offline store
 recipe["imgref"] = "$BASE_IMGREF"
 recipe["local_imgref"] = "containers-storage:$NVIDIA_IMGREF"
+# Variant-specific bootloader and composefs backend
+recipe["bootloader"] = "$BOOTLOADER"
+recipe["composeFsBackend"] = $([ "$COMPOSEFS" = "true" ] && echo "True" || echo "False")
 
 with open("/etc/bootc-installer/recipe.json", "w") as f:
     json.dump(recipe, f, indent=2)
