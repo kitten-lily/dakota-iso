@@ -33,7 +33,7 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         dracut \
         dmsetup \
-        systemd-boot-unsigned \
+        systemd-boot-efi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ref /usr/lib/modules /usr/lib/modules
