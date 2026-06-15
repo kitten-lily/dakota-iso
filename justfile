@@ -96,11 +96,15 @@ container target:
     # e.g. the 'dakota' variant builds its live env from 'dakota-nvidia' so all
     # hardware can boot live, while payload_ref controls the offline store.
     LIVE_TARGET=$(cat "{{target}}/live_target" 2>/dev/null | tr -d '[:space:]' || echo "{{target}}")
+    LIVE_TAG=$(cat "{{target}}/tag" 2>/dev/null | tr -d '[:space:]' || echo "stable")
+    LIVE_REGISTRY=$(cat "{{target}}/registry" 2>/dev/null | tr -d '[:space:]' || echo "projectbluefin")
     podman build --cap-add sys_admin --security-opt label=disable \
         --layers \
         --build-arg DEBUG={{debug}} \
         --build-arg INSTALLER_CHANNEL={{installer_channel}} \
         --build-arg TARGET="${LIVE_TARGET}" \
+        --build-arg TAG="${LIVE_TAG}" \
+        --build-arg REGISTRY="${LIVE_REGISTRY}" \
         -t {{target}}-installer -f ./live/Containerfile ./live
 
 # Build a systemd-boot UEFI live ISO for the given target.
