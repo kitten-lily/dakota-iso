@@ -36,9 +36,9 @@ jobs:
             tag: stable
             iso_name: bluefin-live
           - variant: bluefin-lts
-            payload_image: ghcr.io/projectbluefin/bluefin-lts-nvidia-open:lts
+            payload_image: ghcr.io/ublue-os/bluefin-lts-nvidia-open:lts
             live_target: bluefin-lts-nvidia-open
-            registry: projectbluefin
+            registry: ublue-os
             tag: lts
             iso_name: bluefin-lts-live
 
