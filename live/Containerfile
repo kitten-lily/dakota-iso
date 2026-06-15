@@ -49,6 +49,7 @@ RUN set -ex; \
     else \
         echo "Target has no dracut/rpm — will use Debian cross-build"; \
         echo debian > /tmp/dracut-status; \
+        touch /tmp/initramfs.img; \
     fi
 
 # ── Stage 2b: Debian — cross-builds the initramfs for images without dracut ──
@@ -64,7 +65,7 @@ RUN apt-get update && \
 
 COPY --from=ref /usr/lib/modules /usr/lib/modules
 COPY --from=initramfs-native /tmp/dracut-status /tmp/
-COPY --from=initramfs-native /tmp/initramfs.img* /tmp/native-initramfs/
+COPY --from=initramfs-native /tmp/initramfs.img /tmp/native-initramfs/
 
 RUN set -ex; \
     if grep -q debian /tmp/dracut-status 2>/dev/null; then \
@@ -72,7 +73,7 @@ RUN set -ex; \
         echo "Cross-building initramfs (Debian dracut) for kernel ${kernel}"; \
         DRACUT_NO_XATTR=1 dracut -v --force --zstd --reproducible --no-hostonly \
             --add "dmsquash-live" \
-            --add-drivers "squashfs overlay loop iso9660 sr_mod cdrom virtio_scsi virtio_pci virtio_blk" \
+            --add-drivers "squashfs overlay loop iso9660 sr_mod cdrom" \
             /tmp/initramfs.img "${kernel}"; \
     else \
         echo "Using native initramfs"; \
