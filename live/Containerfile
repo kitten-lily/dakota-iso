@@ -61,6 +61,7 @@ RUN apt-get update && \
         dmsetup \
         systemd-boot-efi \
         xfsprogs \
+        zstd \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ref /usr/lib/modules /usr/lib/modules

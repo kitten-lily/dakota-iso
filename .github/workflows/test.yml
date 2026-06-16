@@ -16,7 +16,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install system dependencies
+        run: sudo apt-get install -y xorriso dosfstools mtools squashfs-tools
+
+      - name: Install Python dependencies
         run: pip install pytest
 
       - name: Run tests

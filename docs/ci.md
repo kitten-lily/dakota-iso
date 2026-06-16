@@ -131,13 +131,20 @@ add an inline `# shellcheck disable=SCxxxx` comment with a justification.
 
 Runs `pytest tests/ -v` against Python 3.11.
 
-| File | Tests | Coverage |
+> ⚠️ **`pytest tests/` passing does NOT mean the application works.**
+> These are static-analysis and unit-level checks only. The real functional gates
+> are `test-luks-install.yml` (LUKS E2E) and `test-plain-install.yml` (plain install E2E).
+> Never claim a change is verified based on `pytest` alone.
+
+| File | Tests | What it checks |
 |---|---|---|
-| `tests/test_luks_unlock.py` | 52 | `luks-unlock.py` virsh/QEMU interaction, screenshot parsing, passphrase injection |
-| `tests/test_multi_arch_iso.py` | 4 | `build-iso.sh` `--arch` arg parsing; integration tests (skipped if xorriso/mtools absent) |
+| `tests/test_live_build_invariants.py` | 26 | Static assertions on `live/Containerfile`, `live/src/build-iso.sh`, `live/src/configure-live.sh`, and variant config files. Catches text regressions in source files — not runtime behavior. |
+| `tests/test_luks_unlock.py` | 52 | `dakota/src/luks-unlock.py` routing, passphrase injection key sequences, and screenshot parsing. All subprocess calls are mocked — this tests Python logic, not actual virsh/QEMU behavior. |
+| `tests/test_multi_arch_iso.py` | 2 | `live/src/build-iso.sh --arch` flag: single-arch backwards compat and two-arch assembly. **Skipped when `xorriso`/`mtools` are absent.** CI installs these tools so the tests run; they are skipped only in local environments lacking them — and the skip message names the exact apt packages to install. |
 
 Run locally with:
 ```bash
+sudo apt-get install -y xorriso dosfstools mtools squashfs-tools
 pip install pytest
 pytest tests/ -v
 ```

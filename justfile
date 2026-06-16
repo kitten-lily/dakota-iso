@@ -964,7 +964,7 @@ luks-boot-qemu-live target:
     # writes to the serial console; SSH still works because debug-ssh-banner
     # confirms sshd is up.  Either path means the live env is ready.
     for i in $(seq 1 60); do
-        if sudo grep -q "DAKOTA_LIVE_READY" "{{luks-qemu-serial-live}}" 2>/dev/null; then
+        if grep -q "DAKOTA_LIVE_READY" "{{luks-qemu-serial-live}}" 2>/dev/null; then
             echo "Live environment ready (serial marker seen)"
             break
         fi
@@ -972,7 +972,7 @@ luks-boot-qemu-live target:
             echo "Live environment ready (SSH connected)"
             break
         fi
-        [[ "$i" -eq 60 ]] && { echo "ERROR: live env not ready after 5m"; sudo tail -30 "{{luks-qemu-serial-live}}" || true; exit 1; }
+        [[ "$i" -eq 60 ]] && { echo "ERROR: live env not ready after 5m"; tail -30 "{{luks-qemu-serial-live}}" || true; exit 1; }
         sleep 5
     done
 
@@ -1042,9 +1042,9 @@ luks-install-qemu target:
         echo \"BLS patch: \$COUNT entries updated\"
     "'
     echo "Install complete. Shutting down live QEMU..."
-    echo "system_powerdown" | sudo socat - "UNIX-CONNECT:{{luks-qemu-monitor-live}}" 2>/dev/null || true
+    echo "system_powerdown" | socat - "UNIX-CONNECT:{{luks-qemu-monitor-live}}" 2>/dev/null || true
     sleep 5
-    echo "quit" | sudo socat - "UNIX-CONNECT:{{luks-qemu-monitor-live}}" 2>/dev/null || true
+    echo "quit" | socat - "UNIX-CONNECT:{{luks-qemu-monitor-live}}" 2>/dev/null || true
 
 # Boot the installed disk in QEMU (no ISO). Called after luks-install-qemu.
 luks-boot-qemu-installed target:
@@ -1126,8 +1126,10 @@ luks-unlock-qemu target:
     done
 
 # Run Python unit tests.
+# Note: pytest passing means source-file invariants and mocked logic are OK.
+# It does NOT mean the ISO builds or installs correctly — see test-luks-install.yml / test-plain-install.yml.
 test:
-    python3 -m unittest discover -s tests
+    pytest tests/ -v
 
 # ────────────────────────────────────────────────────────────────────────────
 # Plain (unencrypted) composefs install E2E test
@@ -1290,7 +1292,7 @@ plain-boot-qemu-live target:
     SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o PreferredAuthentications=password"
     echo "Waiting for live environment on port {{plain-qemu-ssh-port}}..."
     for i in $(seq 1 60); do
-        if grep -q "DAKOTA_LIVE_READY\|debug-ssh-banner" <(sudo cat "{{plain-qemu-serial-live}}" 2>/dev/null); then
+        if grep -q "DAKOTA_LIVE_READY\|debug-ssh-banner" "{{plain-qemu-serial-live}}" 2>/dev/null; then
             echo "Serial marker seen — polling SSH (sshd lags systemd-ready by ~10-20 s on KVM)..."
             # The serial marker fires when systemd declares the target reached,
             # but sshd finishes host-key generation after that and temporarily
@@ -1306,7 +1308,7 @@ plain-boot-qemu-live target:
                 sleep 3
             done
             echo "ERROR: serial marker seen but SSH not ready after 90 s" >&2
-            sudo cat "{{plain-qemu-serial-live}}" >&2
+            cat "{{plain-qemu-serial-live}}" >&2
             exit 1
         fi
         if sshpass -p live ssh $SSH_OPTS liveuser@127.0.0.1 -p {{plain-qemu-ssh-port}} true 2>/dev/null; then
@@ -1315,7 +1317,7 @@ plain-boot-qemu-live target:
             sleep 15
             break
         fi
-        [[ $i -eq 60 ]] && { echo "Timeout waiting for live environment" >&2; sudo cat "{{plain-qemu-serial-live}}" >&2; exit 1; }
+        [[ $i -eq 60 ]] && { echo "Timeout waiting for live environment" >&2; cat "{{plain-qemu-serial-live}}" >&2; exit 1; }
         sleep 5
     done
 
@@ -1337,7 +1339,8 @@ plain-install-qemu target:
     fi
     RECIPE_TMP=$(mktemp /tmp/plain-recipe-XXXXXX.json)
     trap "rm -f '${RECIPE_TMP}'" EXIT
-    printf '{\n  "disk": "%s",\n  "filesystem": "xfs",\n  "image": "%s",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-plain-test",\n  "encryption": {"type": "none"},\n  "flatpaks": []\n}\n' \
+    # ponytail: btrfs until xfs.ko lands in dakota-nvidia initramfs (issue #100)
+    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "%s",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-plain-test",\n  "encryption": {"type": "none"},\n  "flatpaks": []\n}\n' \
         "${DISK}" "${INSTALL_IMAGE}" > "${RECIPE_TMP}"
     $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/plain-recipe.json
     # Mount scratch disk over /var/tmp before fisherman runs.
@@ -1376,9 +1379,9 @@ plain-install-qemu target:
         echo \"BLS patch: \$COUNT entries updated\"
     "'
     echo "Install complete. Shutting down live QEMU..."
-    echo "system_powerdown" | sudo socat - "UNIX-CONNECT:{{plain-qemu-monitor-live}}" 2>/dev/null || true
+    echo "system_powerdown" | socat - "UNIX-CONNECT:{{plain-qemu-monitor-live}}" 2>/dev/null || true
     sleep 5
-    echo "quit" | sudo socat - "UNIX-CONNECT:{{plain-qemu-monitor-live}}" 2>/dev/null || true
+    echo "quit" | socat - "UNIX-CONNECT:{{plain-qemu-monitor-live}}" 2>/dev/null || true
 
 # Boot the installed disk (no ISO) after plain-install-qemu.
 plain-boot-qemu-installed target:
@@ -1444,12 +1447,12 @@ plain-verify-qemu target:
     echo "Waiting for installed system to reach Graphical Interface (up to 3 min)..."
     DEADLINE=$((SECONDS + 180))
     while [[ $SECONDS -lt $DEADLINE ]]; do
-        LOG=$(sudo cat "$SERIAL" 2>/dev/null || true)
+        LOG=$(cat "$SERIAL" 2>/dev/null || true)
         if echo "$LOG" | grep -q "Reached target.*Graphical\|Reached target.*Multi-User\|login:"; then
             echo "✅ Installed system boot verified — plain composefs install succeeded"
-            echo "screendump $SCREENSHOT" | sudo socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
+            echo "screendump $SCREENSHOT" | socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
             bash "dakota/src/show-screenshot.sh" "$SCREENSHOT" "Installed system" 2>/dev/null || true
-            echo "quit" | sudo socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
+            echo "quit" | socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
             exit 0
         fi
         # Detect emergency shell / kernel panic — fast-fail
@@ -1463,6 +1466,6 @@ plain-verify-qemu target:
     done
     echo "❌ Timeout: installed system did not reach graphical target in 3 minutes" >&2
     echo "--- last 30 lines of serial log ---" >&2
-    sudo cat "$SERIAL" 2>/dev/null | tail -30 >&2
-    echo "screendump $SCREENSHOT" | sudo socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
+    cat "$SERIAL" 2>/dev/null | tail -30 >&2
+    echo "screendump $SCREENSHOT" | socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
     exit 1

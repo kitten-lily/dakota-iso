@@ -75,6 +75,21 @@ If the answer is "none", write the test first.
 | Any change to the installer recipe | E2E recipe matches what the interactive installer sends by default |
 | Any change to boot parameters | Regression test asserts the parameter is present in generated boot entries |
 
+**`pytest tests/` passing does NOT mean the application works.**
+The Python unit tests (`test.yml`) are fast static checks — they verify source-file
+text invariants and Python routing logic with mocked subprocesses.  They cannot catch
+runtime failures: a broken ISO build, a LUKS unlock that fails in QEMU, or an installer
+that cannot find the embedded VFS store.  The real functional gates are:
+
+| Gate | Workflow | What it proves |
+|---|---|---|
+| Fast unit tests | `test.yml` — runs on every PR | Source-file invariants and Python logic. Necessary but not sufficient. |
+| LUKS install E2E | `test-luks-install.yml` | Encrypted install completes and installed system boots. |
+| Plain install E2E | `test-plain-install.yml` | Unencrypted XFS composefs install completes and installed system boots. |
+
+Never say "tests pass" to mean "the application works". Say "unit tests pass" and specify
+which E2E gate (if any) covers the change.
+
 **The E2E must test the same code path users hit.** If the interactive installer defaults to XFS, the E2E must use XFS. A test that passes on btrfs while users install on XFS is not a test — it is a false signal.
 
 **Never claim a fix is verified by CI if you have not confirmed what the CI test actually exercises.** Check the recipe, the flags, the filesystem — not just the green checkmark.
@@ -95,6 +110,13 @@ Do not assume you know the build system, disk space requirements, or CI constrai
 | R2 promotion / named releases | [`docs/r2-promotion.md`](docs/r2-promotion.md) |
 
 ### 2. Verification Gate
+
+**Read [`docs/skills/qa-policy.md`](docs/skills/qa-policy.md) before running any test or making any verification claim.**
+
+Key rules (full policy in that file):
+- **Always test fresh artifacts.** Kill stale QEMU processes and delete stale install disks before every run.
+- **`debug=1` is required for E2E.** SSH is disabled in production ISOs. Use `just debug=1 plain-e2e dakota`.
+- **"ISO booted" is not proof.** Only a completed install + installed-system boot proves the pipeline works.
 
 Before submitting a PR:
 - Run `just iso-sd-boot <target>` locally (or `just container <target>` for container-only changes)
@@ -129,6 +151,7 @@ for this repo. When you fix a bug or discover a pattern, add a lesson here.
 | **Build system** | [`docs/build.md`](docs/build.md) | Building ISOs locally, disk space, BTRFS/XFS, variants |
 | **Architecture** | [`docs/architecture.md`](docs/architecture.md) | Understanding the two-container pipeline, boot flow, squashfs |
 | **CI/CD** | [`docs/ci.md`](docs/ci.md) | `build-iso.yml`, `test-luks-install.yml`, R2 uploads |
+| **QA policy** | [`docs/skills/qa-policy.md`](docs/skills/qa-policy.md) | Before running any test, E2E, or making a verification claim |
 | **LUKS testing** | [`docs/luks-testing.md`](docs/luks-testing.md) | LUKS E2E test (local QEMU, libvirt, CI-equivalent) |
 | **R2 promotion** | [`docs/r2-promotion.md`](docs/r2-promotion.md) | Promoting ISOs to production, rclone, named releases |
 | **Variants** | [`docs/variants.md`](docs/variants.md) | Adding new variants, `payload_ref` pattern |

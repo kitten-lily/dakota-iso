@@ -12,6 +12,8 @@ Agent entry point for `projectbluefin/dakota-iso`. Load only the skill(s) that m
 | Set up a dev environment or clone this repo | [`docs/skills/onboarding.md`](skills/onboarding.md) |
 | Understand issue labels and lifecycle | [`docs/skills/label-workflow.md`](skills/label-workflow.md) |
 | Know when to stop and ask a human | [`docs/skills/human-gates.md`](skills/human-gates.md) |
+| **QA and testing** | |
+| Run any E2E test, verify a build, or make a verification claim | [`docs/skills/qa-policy.md`](skills/qa-policy.md) |
 | **Building ISOs** | |
 | Build ISOs locally, disk space, BTRFS/XFS quirks | [`docs/build.md`](build.md) |
 | Unified nvidia ISO — size, compression, nvidia_imgref | [`docs/build.md`](build.md) |

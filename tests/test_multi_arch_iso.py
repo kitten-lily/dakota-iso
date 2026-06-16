@@ -10,13 +10,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
 
-def _have_tools():
-    """Check if ISO build tools are available."""
-    for tool in ("xorriso", "mkfs.fat", "mtools", "mmd", "mcopy"):
+
+def _missing_tools():
+    """Return a list of missing ISO build tools, or empty list if all present."""
+    missing = []
+    for tool in ("xorriso", "mkfs.fat", "mmd", "mcopy"):
         if subprocess.run(["which", tool], capture_output=True).returncode != 0:
-            return False
-    return True
+            missing.append(tool)
+    return missing
 
 
 def _create_mock_boot_tar(tmpdir: Path, arch: str) -> Path:
@@ -64,7 +67,16 @@ def _create_mock_squashfs(tmpdir: Path, arch: str) -> Path:
     return sfs_path
 
 
-@unittest.skipUnless(_have_tools(), "ISO build tools not available")
+_MISSING = _missing_tools()
+
+
+@pytest.mark.skipif(
+    bool(_MISSING),
+    reason=(
+        f"ISO build tools not installed: {_MISSING}. "
+        "Install with: sudo apt-get install -y xorriso dosfstools mtools"
+    ),
+)
 class TestMultiArchISO(unittest.TestCase):
     """Test multi-arch ISO assembly."""
 
@@ -116,26 +128,6 @@ class TestMultiArchISO(unittest.TestCase):
         self.assertIn("[x86_64]", result.stdout)
         self.assertIn("[aarch64]", result.stdout)
         self.assertIn("Multi-arch mode: 2", result.stdout)
-
-
-class TestMultiArchArgParsing(unittest.TestCase):
-    """Test argument parsing without requiring ISO tools."""
-
-    def test_arch_spec_parsing(self):
-        """Verify arch:boot-tar:squashfs format is parseable."""
-        spec = "x86_64:/path/to/boot.tar:/path/to/rootfs.sfs"
-        parts = spec.split(":", 2)
-        self.assertEqual(parts[0], "x86_64")
-        self.assertEqual(parts[1], "/path/to/boot.tar")
-        self.assertEqual(parts[2], "/path/to/rootfs.sfs")
-
-    def test_arch_spec_aarch64(self):
-        """Verify aarch64 spec parsing."""
-        spec = "aarch64:/tmp/arm-boot.tar:/tmp/arm-rootfs.sfs"
-        parts = spec.split(":", 2)
-        self.assertEqual(parts[0], "aarch64")
-        self.assertEqual(parts[1], "/tmp/arm-boot.tar")
-        self.assertEqual(parts[2], "/tmp/arm-rootfs.sfs")
 
 
 if __name__ == "__main__":

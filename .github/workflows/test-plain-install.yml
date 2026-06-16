@@ -121,7 +121,7 @@ jobs:
           ISO_SIZE=$(stat -c%s output/dakota-live.iso 2>/dev/null || echo 0)
           echo "iso_size=$ISO_SIZE" >> "$GITHUB_OUTPUT"
           echo "duration=$((SECONDS - START))" >> "$GITHUB_OUTPUT"
-          echo "Built ISO: $(numfmt --to=iec $ISO_SIZE)"
+          echo "Built ISO: $(numfmt --to=iec "$ISO_SIZE")"
 
       - name: Run plain install E2E
         id: plain_test
