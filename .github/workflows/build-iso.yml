@@ -66,7 +66,7 @@ jobs:
       - name: Smoke test — mkfs.xfs runs inside live container
         run: |
           sudo podman run --rm localhost/dakota-nvidia-live:latest \
-            mkfs.xfs --version
+            mkfs.xfs -V
 
       - name: Disk space before squashfs build
         run: df -h /
