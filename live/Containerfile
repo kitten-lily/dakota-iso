@@ -95,10 +95,17 @@ ARG DEBUG=0
 ENV TARGET=${TARGET} INSTALLER_CHANNEL=${INSTALLER_CHANNEL} DEBUG=${DEBUG}
 
 COPY --from=initramfs-builder /tmp/initramfs.img /tmp/initramfs.img
-# xfsprogs: copy mkfs.xfs so fisherman's preflight check passes on images
-# (like GnomeOS/dakota) that don't ship xfsprogs by default. We changed the
-# installer default to XFS which triggers the mkfs.xfs preflight check.
+# xfsprogs: copy mkfs.xfs AND its shared library deps so the binary actually
+# runs at install time (not just passes the preflight existence check).
+# Deps from: ldd /usr/sbin/mkfs.xfs on debian:sid (non-glibc only):
+#   libblkid.so.1, libuuid.so.1, libinih.so.1, liburcu.so.8
 COPY --from=initramfs-builder /usr/sbin/mkfs.xfs /usr/sbin/mkfs.xfs
+COPY --from=initramfs-builder \
+    /usr/lib/x86_64-linux-gnu/libinih.so.1 \
+    /usr/lib/x86_64-linux-gnu/liburcu.so.8 \
+    /usr/lib/x86_64-linux-gnu/libblkid.so.1 \
+    /usr/lib/x86_64-linux-gnu/libuuid.so.1 \
+    /usr/lib/x86_64-linux-gnu/
 COPY --from=initramfs-builder /usr/sbin/xfs_repair /usr/sbin/xfs_repair
 # Ensure systemd-boot EFI binary is present for the live ISO builder regardless
 # of whether the target distro ships it (e.g. bluefin uses GRUB, not systemd-boot,

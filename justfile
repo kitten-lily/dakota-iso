@@ -1337,7 +1337,7 @@ plain-install-qemu target:
     fi
     RECIPE_TMP=$(mktemp /tmp/plain-recipe-XXXXXX.json)
     trap "rm -f '${RECIPE_TMP}'" EXIT
-    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "%s",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-plain-test",\n  "encryption": {"type": "none"},\n  "flatpaks": []\n}\n' \
+    printf '{\n  "disk": "%s",\n  "filesystem": "xfs",\n  "image": "%s",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-plain-test",\n  "encryption": {"type": "none"},\n  "flatpaks": []\n}\n' \
         "${DISK}" "${INSTALL_IMAGE}" > "${RECIPE_TMP}"
     $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/plain-recipe.json
     # Mount scratch disk over /var/tmp before fisherman runs.

@@ -59,6 +59,15 @@ jobs:
             -t localhost/dakota-nvidia-live:latest \
             ./live
 
+      # Verify mkfs.xfs executes successfully inside the live container.
+      # Catches missing shared library deps (libinih, liburcu, etc.) before
+      # the squashfs is assembled — a runtime failure here costs seconds,
+      # not a full ISO build + user install attempt.
+      - name: Smoke test — mkfs.xfs runs inside live container
+        run: |
+          sudo podman run --rm localhost/dakota-nvidia-live:latest \
+            mkfs.xfs --version
+
       - name: Disk space before squashfs build
         run: df -h /
 

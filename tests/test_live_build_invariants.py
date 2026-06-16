@@ -111,6 +111,35 @@ class TestXfsprogs(unittest.TestCase):
             "the initramfs-builder so it is present in the live squashfs.",
         )
 
+    def test_containerfile_copies_mkfs_xfs_shared_libs(self):
+        """Final stage must COPY all shared library deps of mkfs.xfs.
+
+        Copying the binary without its deps produces a live image where
+        mkfs.xfs exists but fails at runtime with a missing shared library
+        error — silently passing all unit tests while breaking every XFS
+        install.  This test ensures the four non-glibc deps are present.
+
+        Deps from: ldd /usr/sbin/mkfs.xfs on debian:sid (non-glibc only):
+          libblkid.so.1  libuuid.so.1  libinih.so.1  liburcu.so.8
+        """
+        content = CONTAINERFILE.read_text()
+        required_libs = [
+            "libinih.so",
+            "liburcu.so",
+            "libblkid.so",
+            "libuuid.so",
+        ]
+        for lib in required_libs:
+            self.assertIn(
+                lib,
+                content,
+                f"Containerfile final stage is missing COPY for {lib} — "
+                "mkfs.xfs will fail at runtime with a missing shared library "
+                "error on any image that does not already ship this library "
+                "(e.g. GnomeOS/dakota).  Add it to the COPY block alongside "
+                "mkfs.xfs.",
+            )
+
 
 class TestInitramfsSelectionLogic(unittest.TestCase):
     """Verify the native-vs-Debian dracut selection logic in Containerfile."""

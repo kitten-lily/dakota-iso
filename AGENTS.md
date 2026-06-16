@@ -59,7 +59,27 @@ gh issue list --repo projectbluefin/dakota-iso --label "queue/agent-ready" --ass
 
 ## Mandatory Behavioral Gates
 
-### 1. Read-First Gate
+### 0. Test Gate — nothing ships without a test that would have caught it
+
+**This gate fires before writing any code.**
+
+For every change to the installer pipeline, ask:
+> "If this change is wrong, which test breaks?"
+
+If the answer is "none", write the test first.
+
+| Change type | Required test |
+|---|---|
+| Copying a binary into the live container | Unit test asserts binary AND all shared lib deps are present in Containerfile |
+| Any change to filesystem formatting | CI smoke test runs `mkfs.<fs>` inside the container; E2E uses that filesystem |
+| Any change to the installer recipe | E2E recipe matches what the interactive installer sends by default |
+| Any change to boot parameters | Regression test asserts the parameter is present in generated boot entries |
+
+**The E2E must test the same code path users hit.** If the interactive installer defaults to XFS, the E2E must use XFS. A test that passes on btrfs while users install on XFS is not a test — it is a false signal.
+
+**Never claim a fix is verified by CI if you have not confirmed what the CI test actually exercises.** Check the recipe, the flags, the filesystem — not just the green checkmark.
+
+
 
 Read the relevant skill file in `docs/` **before making any changes**.
 Do not assume you know the build system, disk space requirements, or CI constraints.
