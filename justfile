@@ -507,14 +507,15 @@ boot-iso-serial target:
         /usr/share/edk2/ovmf/OVMF_CODE.fd \
         /usr/share/edk2-ovmf/x64/OVMF_CODE.fd \
         /usr/share/ovmf/OVMF.fd \
-        /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd; do
+        /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     OVMF_VARS_SRC=""
     for f in \
         /usr/share/OVMF/OVMF_VARS.fd \
         /usr/share/edk2/ovmf/OVMF_VARS.fd \
-        /usr/share/edk2-ovmf/x64/OVMF_VARS.fd; do
+        /usr/share/edk2-ovmf/x64/OVMF_VARS.fd \
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
         [[ -f "$f" ]] && { OVMF_VARS_SRC="$f"; break; }
     done
     if [[ -z "$OVMF_CODE" ]]; then
@@ -577,14 +578,15 @@ boot-libvirt-debug target:
         /usr/share/edk2/ovmf/OVMF_CODE.fd \
         /usr/share/edk2-ovmf/x64/OVMF_CODE.fd \
         /usr/share/ovmf/OVMF.fd \
-        /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd; do
+        /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     OVMF_VARS=""
     for f in \
         /usr/share/OVMF/OVMF_VARS.fd \
         /usr/share/edk2/ovmf/OVMF_VARS.fd \
-        /usr/share/edk2-ovmf/x64/OVMF_VARS.fd; do
+        /usr/share/edk2-ovmf/x64/OVMF_VARS.fd \
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
         [[ -f "$f" ]] && { OVMF_VARS="$f"; break; }
     done
     if [[ -z "$OVMF_CODE" ]]; then
@@ -862,7 +864,7 @@ e2e target:
     echo "=== Step 1/2: Building ISO (debug={{debug}}, installer_channel={{installer_channel}}) ==="
     just debug={{debug}} installer_channel={{installer_channel}} output_dir={{output_dir}} iso-sd-boot {{target}}
     echo "=== Step 2/2: LUKS end-to-end test ==="
-    sudo rm -f "{{luks-qemu-disk}}" "{{luks-scratch-disk}}" \
+    rm -f "{{luks-qemu-disk}}" "{{luks-scratch-disk}}" \
                "{{luks-qemu-monitor-live}}" "{{luks-qemu-monitor-installed}}" \
                "{{luks-qemu-serial-live}}" "{{luks-qemu-serial-installed}}"
     just luks-test-qemu {{target}}
@@ -901,11 +903,12 @@ luks-boot-qemu-live target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
-              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd; do
+              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
-              /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+              /usr/share/edk2/ovmf/OVMF_VARS.fd \
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-qemu-live-vars.fd; OVMF_VARS=/var/tmp/dakota-qemu-live-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
@@ -914,7 +917,7 @@ luks-boot-qemu-live target:
     # Scratch disk: 16G sparse file mounted over /var/tmp in the live VM to
     # give skopeo disk-backed space for VFS blob extraction (~9 GB blob).
     [[ -f "{{luks-scratch-disk}}" ]] || truncate -s 16G "{{luks-scratch-disk}}"
-    sudo rm -f "{{luks-qemu-monitor-live}}" "{{luks-qemu-serial-live}}"
+    rm -f "{{luks-qemu-monitor-live}}" "{{luks-qemu-serial-live}}"
 
     echo "Booting live ISO: $ISO"
     # KVM access: try direct, then sudo, then fall back to TCG
@@ -1054,16 +1057,17 @@ luks-boot-qemu-installed target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
-              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd; do
+              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
-              /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+              /usr/share/edk2/ovmf/OVMF_VARS.fd \
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-qemu-installed-vars.fd; OVMF_VARS=/var/tmp/dakota-qemu-installed-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
 
-    sudo rm -f "{{luks-qemu-monitor-installed}}" "{{luks-qemu-serial-installed}}"
+    rm -f "{{luks-qemu-monitor-installed}}" "{{luks-qemu-serial-installed}}"
 
     echo "Booting installed disk: {{luks-qemu-disk}}"
     # KVM access: try direct, then sudo, then fall back to TCG
@@ -1151,7 +1155,7 @@ plain-e2e target:
     echo "=== Step 1/2: Building ISO (debug={{debug}}, installer_channel={{installer_channel}}) ==="
     just debug={{debug}} installer_channel={{installer_channel}} output_dir={{output_dir}} iso-sd-boot {{target}}
     echo "=== Step 2/2: Plain composefs install test (qemu-mem={{qemu-mem}} MiB) ==="
-    sudo rm -f "{{plain-qemu-disk}}" "{{plain-scratch-disk}}" \
+    rm -f "{{plain-qemu-disk}}" "{{plain-scratch-disk}}" \
                "{{plain-qemu-monitor-live}}" "{{plain-qemu-monitor-installed}}" \
                "{{plain-qemu-serial-live}}" "{{plain-qemu-serial-installed}}"
     just qemu-mem={{qemu-mem}} plain-test-qemu {{target}}
@@ -1239,11 +1243,12 @@ plain-boot-qemu-live target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
-              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd; do
+              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
-              /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+              /usr/share/edk2/ovmf/OVMF_VARS.fd \
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-plain-qemu-live-vars.fd; OVMF_VARS=/var/tmp/dakota-plain-qemu-live-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
@@ -1251,7 +1256,7 @@ plain-boot-qemu-live target:
     # Scratch disk: 16G sparse file mounted over /var/tmp in the live VM to
     # give skopeo disk-backed space for VFS blob extraction (~9 GB blob).
     [[ -f "{{plain-scratch-disk}}" ]] || truncate -s 16G "{{plain-scratch-disk}}"
-    sudo rm -f "{{plain-qemu-monitor-live}}" "{{plain-qemu-serial-live}}"
+    rm -f "{{plain-qemu-monitor-live}}" "{{plain-qemu-serial-live}}"
     QEMU_ACCEL="-accel kvm"
     QEMU_PREFIX=""
     if ! test -r /dev/kvm 2>/dev/null; then
@@ -1386,15 +1391,16 @@ plain-boot-qemu-installed target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
-              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.fd; do
+              /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
-              /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+              /usr/share/edk2/ovmf/OVMF_VARS.fd \
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-plain-qemu-installed-vars.fd; OVMF_VARS=/var/tmp/dakota-plain-qemu-installed-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
-    sudo rm -f "{{plain-qemu-monitor-installed}}" "{{plain-qemu-serial-installed}}"
+    rm -f "{{plain-qemu-monitor-installed}}" "{{plain-qemu-serial-installed}}"
     QEMU_ACCEL="-accel kvm"
     QEMU_PREFIX=""
     if ! test -r /dev/kvm 2>/dev/null; then
