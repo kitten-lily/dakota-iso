@@ -528,3 +528,36 @@ BIOS, leaving the screen dark even though the system is running fine.
 **Regression test:** `TestBootCmdline::test_live_build_iso_has_nvidia_drm_modeset`
 and `test_dakota_build_iso_has_nvidia_drm_modeset` in `tests/test_live_build_invariants.py`
 assert every boot entry line with `root=live:/dev/sr0` contains this parameter.
+
+---
+
+### Lesson: root=live:/dev/sr0 breaks USB flash drive boots (2026-06)
+
+**Symptom:** Black screen on boot on all non-NVIDIA real hardware. ISO boots
+fine in QEMU but silently hangs on physical machines.
+
+**Root cause:** `ca7f1e4` switched from `root=live:CDLABEL=DAKOTA_LIVE` to
+`root=live:/dev/sr0` to fix CDLABEL detection in the Debian-built initramfs
+on GnomeOS kernels. `/dev/sr0` is an optical-drive device node — it only
+exists when the ISO is presented via a SCSI CD emulation (QEMU virtio-scsi,
+physical optical drive). USB flash drive boots present the ISO as `/dev/sdX`.
+Dracut waits indefinitely for `/dev/sr0`, which never appears. With `quiet`
+suppressing all output, the result is a permanent, silent black screen.
+
+This affected *every* user booting from USB — the majority of real hardware
+users — regardless of GPU.
+
+**Fix:** Use `root=live:LABEL=DAKOTA_LIVE` (blkid-based label scan). `LABEL=`
+works on any block device (USB `/dev/sdX`, optical `/dev/sr0`, QEMU
+virtio-scsi) without requiring the `cdrom_id` udev helper that broke with
+the Debian-built initramfs.
+
+**Why not CDLABEL=:** `CDLABEL=` uses the `cdrom_id` udev helper which is
+absent or broken in the Debian-built initramfs on GnomeOS native kernels.
+`LABEL=` uses `blkid` which is always present.
+
+**Regression test:** `TestBootCmdline::test_{live,dakota}_build_iso_uses_label_not_cdlabel_or_sr0`
+asserts `/dev/sr0` and `CDLABEL=` are banned from all boot entries.
+
+**E2E verified:** `just debug=1 plain-e2e dakota` — full install + installed
+system boot passed with `LABEL=DAKOTA_LIVE`.
