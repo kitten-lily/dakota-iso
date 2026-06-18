@@ -1382,14 +1382,14 @@ plain-install-qemu target:
         COUNT=0
         for entry in \$TMP/loader/entries/*.conf \$TMP/EFI/loader/entries/*.conf; do
             [[  -f \"\$entry\" ]] || continue
-            echo \"=== BLS entry before patch: \$(basename \$entry) ==="
+            echo \"=== BLS entry before patch: \$(basename \$entry) ===\"
             cat \"\$entry\"
             if grep -q \"^options \" \"\$entry\" && ! grep -q \"console=tty0\" \"\$entry\"; then
                 # Also add rd.info so bootc-root-setup output is visible on serial
                 sed -i \"s|^options .*|& console=tty0 console=ttyS0 rd.info systemd.journald.forward_to_console=yes|\" \"\$entry\"
                 COUNT=\$((COUNT+1))
             fi
-            echo \"=== BLS entry after patch ==="
+            echo \"=== BLS entry after patch ===\"
             cat \"\$entry\"
         done
         echo \"BLS patch: \$COUNT entries updated\"
