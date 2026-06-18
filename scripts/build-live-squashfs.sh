@@ -132,6 +132,15 @@ if [[ -n "${OCI_IMAGE}" ]]; then
     # at each layer.  Squash to 1 layer to keep the store to ~6 GB.
     echo ">>> [live-squashfs] squashing ${OCI_IMAGE} to single layer ..."
     SQUASH_CTR="$(buildah from --pull-never "${OCI_IMAGE}")"
+    # Inject root-mount-spec = 'LABEL=root' so the installed system's BLS entry
+    # uses LABEL=root instead of UUID.  bootc's UUID auto-detect calls findmnt
+    # inside a nested container where the udev database is not accessible, so
+    # UUID is always empty.  fisherman always formats the root partition with
+    # -L root, so LABEL=root is always valid.
+    # Mirrors the same injection in justfile's iso-sd-boot recipe.
+    echo "root-mount-spec = 'LABEL=root'" > "${WORK}/bootc-root-mount.toml"
+    buildah copy "${SQUASH_CTR}" "${WORK}/bootc-root-mount.toml" /tmp/.bootc-root-mount.toml
+    buildah run  "${SQUASH_CTR}" -- sh -c 'cat /tmp/.bootc-root-mount.toml >> /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
     buildah commit --squash "${SQUASH_CTR}" "oci-archive:${OCI_ARCHIVE}:${OCI_IMAGE}"
     buildah rm "${SQUASH_CTR}"
 

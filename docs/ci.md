@@ -561,3 +561,28 @@ asserts `/dev/sr0` and `CDLABEL=` are banned from all boot entries.
 
 **E2E verified:** `just debug=1 plain-e2e dakota` — full install + installed
 system boot passed with `LABEL=DAKOTA_LIVE`.
+
+### Lesson: build-live-squashfs.sh missing root-mount-spec injection → installed system emergency mode (2026-06)
+
+**Symptom:** Installed system boots into emergency mode in CI with
+`initrd-parse-etc.service: Failed with result 'start-limit-hit'`.
+Local builds (`just iso-sd-boot`) succeed; CI builds (`build-iso.yml`) fail.
+
+**Root cause:** `justfile`'s `iso-sd-boot` recipe injects
+`root-mount-spec = 'LABEL=root'` into the squashed payload OCI image via
+`buildah copy/run` before embedding it into VFS containers-storage.
+`scripts/build-live-squashfs.sh` (used by `build-iso.yml`) squashed the
+OCI payload but **skipped this injection**. Without it, `bootc install`
+falls back to UUID auto-detect, which calls `findmnt` inside a nested
+container where the udev database is inaccessible — UUID is always empty.
+The installed BLS entry gets `root=UUID=` with an empty UUID, so the
+initrd can't find the root partition → `bootc-root-setup.service` fails
+→ `initrd-parse-etc.service` crash-loops → emergency mode.
+
+**Fix:** Added the same `buildah copy/run` injection to
+`scripts/build-live-squashfs.sh` immediately after `buildah from` and
+before `buildah commit --squash`.
+
+**Rule:** Any time `justfile`'s `iso-sd-boot` injects config into the
+squashed OCI payload, `scripts/build-live-squashfs.sh` must apply the
+same injection. They must stay in sync.
