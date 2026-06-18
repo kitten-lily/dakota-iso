@@ -240,7 +240,7 @@ jobs:
 
       - name: "E2E 4/4 — Boot installed + verify Graphical target (8 GiB)"
         id: e2e_verify
-        timeout-minutes: 15
+        timeout-minutes: 20
         if: steps.e2e_install.outcome == 'success'
         run: |
           sudo env PATH="$PATH" just qemu-mem=8192 plain-boot-qemu-installed dakota

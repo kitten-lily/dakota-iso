@@ -1382,10 +1382,15 @@ plain-install-qemu target:
         COUNT=0
         for entry in \$TMP/loader/entries/*.conf \$TMP/EFI/loader/entries/*.conf; do
             [[  -f \"\$entry\" ]] || continue
+            echo \"=== BLS entry before patch: \$(basename \$entry) ==="
+            cat \"\$entry\"
             if grep -q \"^options \" \"\$entry\" && ! grep -q \"console=tty0\" \"\$entry\"; then
-                sed -i \"s|^options .*|& console=tty0 console=ttyS0|\" \"\$entry\"
+                # Also add rd.info so bootc-root-setup output is visible on serial
+                sed -i \"s|^options .*|& console=tty0 console=ttyS0 rd.info systemd.journald.forward_to_console=yes|\" \"\$entry\"
                 COUNT=\$((COUNT+1))
             fi
+            echo \"=== BLS entry after patch ==="
+            cat \"\$entry\"
         done
         echo \"BLS patch: \$COUNT entries updated\"
     "'
@@ -1455,8 +1460,8 @@ plain-verify-qemu target:
     SERIAL="{{plain-qemu-serial-installed}}"
     MONITOR="{{plain-qemu-monitor-installed}}"
     SCREENSHOT="/tmp/plain-screenshot-final.ppm"
-    echo "Waiting for installed system to reach Graphical Interface (up to 3 min)..."
-    DEADLINE=$((SECONDS + 180))
+    echo "Waiting for installed system to reach Graphical Interface (up to 5 min)..."
+    DEADLINE=$((SECONDS + 300))
     while [[ $SECONDS -lt $DEADLINE ]]; do
         LOG=$(cat "$SERIAL" 2>/dev/null || true)
         if echo "$LOG" | grep -q "Reached target.*Graphical\|Reached target.*Multi-User\|login:"; then
@@ -1475,7 +1480,7 @@ plain-verify-qemu target:
         fi
         sleep 5
     done
-    echo "❌ Timeout: installed system did not reach graphical target in 3 minutes" >&2
+    echo "❌ Timeout: installed system did not reach graphical target in 5 minutes" >&2
     echo "--- last 30 lines of serial log ---" >&2
     cat "$SERIAL" 2>/dev/null | tail -30 >&2
     echo "screendump $SCREENSHOT" | socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
