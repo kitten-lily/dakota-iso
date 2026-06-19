@@ -174,7 +174,8 @@ jobs:
             -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
             -drive "if=pflash,format=raw,file=/tmp/efi-vars.fd" \
             -drive "if=none,id=iso,file=${ISO_PATH},media=cdrom,readonly=on,format=raw" \
-            -device scsi-cd,drive=iso \
+            -device virtio-scsi-pci,id=scsi0 \
+            -device scsi-cd,drive=iso,bus=scsi0.0 \
             -drive "if=none,id=disk,file=/tmp/install.img,format=raw" \
             -device virtio-blk-pci,drive=disk \
             -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
