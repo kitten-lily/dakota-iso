@@ -1,0 +1,19 @@
+{
+  "default_image": "ghcr.io/projectbluefin/bluefin-lts-hwe:stable",
+  "fallback_flatpaks": [],
+  "images": [
+    {
+      "name": "Bluefin LTS HWE",
+      "imgref": "ghcr.io/projectbluefin/bluefin-lts-hwe:stable",
+      "nvidia_imgref": "ghcr.io/projectbluefin/bluefin-lts-hwe-nvidia:stable",
+      "desc": "Bluefin LTS HWE — long-term support with hardware enablement kernel",
+      "icon": "resource:///org/bootcinstaller/Installer/images/bluefin-lts.png",
+      "bootloader": "grub2",
+      "filesystem": "xfs",
+      "composefs": false,
+      "needs_user_creation": true,
+      "flatpak_var_path": "var/lib/flatpak",
+      "filesystems": ["xfs", "btrfs"]
+    }
+  ]
+}
