@@ -132,17 +132,39 @@ if [[ -n "${OCI_IMAGE}" ]]; then
     # at each layer.  Squash to 1 layer to keep the store to ~6 GB.
     echo ">>> [live-squashfs] squashing ${OCI_IMAGE} to single layer ..."
     SQUASH_CTR="$(buildah from --pull-never "${OCI_IMAGE}")"
-    # Inject root-mount-spec = 'LABEL=root' so the installed system's BLS entry
-    # uses LABEL=root instead of UUID.  bootc's UUID auto-detect calls findmnt
-    # inside a nested container where the udev database is not accessible, so
-    # UUID is always empty.  fisherman always formats the root partition with
-    # -L root, so LABEL=root is always valid.
+    # Inject root-mount-spec so the installed system's BLS entry uses LABEL=root
+    # instead of UUID.  bootc's UUID auto-detect calls findmnt inside a nested
+    # container where the udev database is not accessible, so UUID is always empty.
+    # fisherman always formats the root partition with -L root, so LABEL=root is valid.
+    # Note: newer bootc (>=1.0) requires the [install] section wrapper.
     # Mirrors the same injection in justfile's iso-sd-boot recipe.
-    echo "root-mount-spec = 'LABEL=root'" > "${WORK}/bootc-root-mount.toml"
+    printf '[install]\nroot-mount-spec = "LABEL=root"\n' > "${WORK}/bootc-root-mount.toml"
     buildah copy "${SQUASH_CTR}" "${WORK}/bootc-root-mount.toml" /tmp/.bootc-root-mount.toml
-    buildah run  "${SQUASH_CTR}" -- sh -c 'cat /tmp/.bootc-root-mount.toml >> /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
+    buildah run  "${SQUASH_CTR}" -- sh -c 'cp /tmp/.bootc-root-mount.toml /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
+    # Inject VFS storage driver via a temp file to avoid shell quoting issues
+    # with double-quoted TOML strings in buildah run sh -c '...'.
+    printf '[storage]\ndriver = "vfs"\nrunroot = "/run/containers/storage"\ngraphroot = "/var/lib/containers/storage"\n' > "${WORK}/vfs-storage.conf"
+    buildah run  "${SQUASH_CTR}" -- mkdir -p /etc/containers
+    buildah copy "${SQUASH_CTR}" "${WORK}/vfs-storage.conf" /etc/containers/storage.conf
     buildah commit --squash "${SQUASH_CTR}" "oci-archive:${OCI_ARCHIVE}:${OCI_IMAGE}"
     buildah rm "${SQUASH_CTR}"
+
+    # Fix ostree.final-diffid: buildah commit --squash preserves the original
+    # annotation which points to the old final layer.  After squash there is
+    # only one layer; update the annotation to match the actual squashed diff_id
+    # so bootc can verify the manifest inside the nested install container.
+    SQUASHED_DIFFID="$(skopeo inspect --config "oci-archive:${OCI_ARCHIVE}:${OCI_IMAGE}" 2>/dev/null | \
+        python3 -c 'import json,sys; c=json.load(sys.stdin); print(c["rootfs"]["diff_ids"][0])' 2>/dev/null || true)"
+    if [[ -n "${SQUASHED_DIFFID}" ]]; then
+        echo ">>> [live-squashfs] updating ostree.final-diffid to ${SQUASHED_DIFFID}"
+        ANNOT_CTR="$(buildah from --pull-never "oci-archive:${OCI_ARCHIVE}:${OCI_IMAGE}")"
+        # Update BOTH config.Labels AND manifest.annotations.
+        # bootc reads ostree.final-diffid from config.Labels, not manifest.annotations.
+        buildah config --label "ostree.final-diffid=${SQUASHED_DIFFID}" "${ANNOT_CTR}"
+        buildah config --annotation "ostree.final-diffid=${SQUASHED_DIFFID}" "${ANNOT_CTR}"
+        buildah commit --squash "${ANNOT_CTR}" "oci-archive:${OCI_ARCHIVE}:${OCI_IMAGE}"
+        buildah rm "${ANNOT_CTR}"
+    fi
 
     # Write a storage conf for skopeo that uses the staging dir as graphroot.
     # Paths are container-relative: /vfs-storage is bind-mounted to CS_STAGING.

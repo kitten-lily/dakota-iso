@@ -191,8 +191,41 @@ iso-sd-boot target:
     # root_mount_spec bypasses UUID auto-detect, which fails inside podman-in-podman
     # because findmnt cannot read the udev database from the nested container.
     # LABEL=root is always valid: fisherman formats every root partition with -L root.
-    # Uses TOML single-quoted string ('LABEL=root') to avoid shell quoting conflicts.
-    echo "root-mount-spec = 'LABEL=root'" > "${OUTPUT_DIR}/.bootc-root-mount.toml"
+    # Note: newer bootc (>=1.0) requires the [install] section wrapper.
+    printf '[install]\nroot-mount-spec = "LABEL=root"\n' > "${OUTPUT_DIR}/.bootc-root-mount.toml"
+    # Write VFS storage.conf: Fedora images default to overlay which cannot read
+    # VFS-format layers in the squashfs offline store.  This file forces VFS
+    # inside the install container without affecting the installed system's /usr.
+    printf '[storage]\ndriver = "vfs"\nrunroot = "/run/containers/storage"\ngraphroot = "/var/lib/containers/storage"\n' > "${OUTPUT_DIR}/.vfs-storage.conf"
+
+    # ── OCI archive creation (buildah) ───────────────────────────────────────
+    # Run buildah via 'podman unshare buildah' so each command gets the correct
+    # user-namespace UID mapping for rootless operation.  All quoting happens in
+    # the OUTER recipe shell — no _ns "..." quoting complexity needed here.
+    PAYLOAD_OCI="${OUTPUT_DIR}/{{target}}-payload.oci.tar"
+    INJECT_CTR=$(podman unshare buildah from --pull-never "${PAYLOAD_IMAGE}")
+    podman unshare buildah copy "${INJECT_CTR}" "${OUTPUT_DIR}/.bootc-root-mount.toml" /tmp/.bootc-root-mount.toml
+    podman unshare buildah run  "${INJECT_CTR}" -- sh -c 'cp /tmp/.bootc-root-mount.toml /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
+    podman unshare buildah run  "${INJECT_CTR}" -- mkdir -p /etc/containers
+    podman unshare buildah copy "${INJECT_CTR}" "${OUTPUT_DIR}/.vfs-storage.conf" /etc/containers/storage.conf
+    echo "=== Squashing ${PAYLOAD_IMAGE} to single layer (avoids VFS explosion) ==="
+    podman unshare buildah commit --squash "${INJECT_CTR}" "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}"
+    # Fix ostree.final-diffid: buildah --squash preserves the original annotation
+    # pointing to the old final layer.  bootc reads from config.Labels; update to
+    # the new squashed layer's diff_id.
+    SQUASHED_DIFFID=$(podman unshare skopeo inspect --config "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}" 2>/dev/null | \
+        python3 -c 'import json,sys; c=json.load(sys.stdin); print(c["rootfs"]["diff_ids"][0])' 2>/dev/null || true)
+    if [[ -n "${SQUASHED_DIFFID}" ]]; then
+        echo "Updating ostree.final-diffid to ${SQUASHED_DIFFID}"
+        ANNOT_CTR=$(podman unshare buildah from --pull-never "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}")
+        podman unshare buildah config --label "ostree.final-diffid=${SQUASHED_DIFFID}" "${ANNOT_CTR}"
+        podman unshare buildah config --annotation "ostree.final-diffid=${SQUASHED_DIFFID}" "${ANNOT_CTR}"
+        podman unshare buildah commit --squash "${ANNOT_CTR}" "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}"
+        podman unshare buildah rm "${ANNOT_CTR}"
+    fi
+    podman unshare buildah rm "${INJECT_CTR}"
+    podman rmi "${PAYLOAD_IMAGE}" || true
+
     _ns "
         set -euo pipefail
         echo '=== Disk space inside _ns block ==='
@@ -229,27 +262,11 @@ iso-sd-boot target:
         printf '[storage]\ndriver = \"vfs\"\nrunroot = \"/tmp/cs-runroot\"\ngraphroot = \"/vfs-storage\"\n' \
             > \"\${STORAGE_CONF}\"
 
-        # Chunkified Dakota images have ~120 layers; VFS storage copies the full OS
-        # filesystem at each layer (~6GB) = ~720GB total. One squashed layer = ~6GB.
-        # Uses buildah (not podman create/commit) because buildah preserves the
-        # original image config (CMD, ENTRYPOINT, ENV, labels, annotations).
-        # podman create --entrypoint /bin/sh would corrupt the config, causing
-        # fisherman's \`podman run ... bootc install\` to fail with \`cannot execute
-        # binary file\` (sh treats the bootc ELF binary as a script).
-        echo 'Exporting squashed OCI image to archive...'
-        echo '=== Squashing '"${PAYLOAD_IMAGE}"' to single layer (avoids VFS explosion) ==='
-        SQUASH_CTR=\$(buildah from --pull-never '"${PAYLOAD_IMAGE}"')
-        # Copy host-side bootc root_mount_spec override into the squashed image.
-        # LABEL=root always works: fisherman formats every root partition with -L root.
-        # root_mount_spec avoids UUID auto-detect which fails inside the nested container
-        # (findmnt cannot read the udev database from within a podman-in-podman context).
-        buildah copy \"\${SQUASH_CTR}\" '${OUTPUT_DIR}/.bootc-root-mount.toml' /tmp/.bootc-root-mount.toml
-        buildah run  \"\${SQUASH_CTR}\" -- sh -c 'cat /tmp/.bootc-root-mount.toml >> /usr/lib/bootc/install/00-defaults.toml'
-        buildah commit --squash \"\${SQUASH_CTR}\" oci-archive:\${PAYLOAD_OCI}:'"${PAYLOAD_IMAGE}"'
-        buildah rm \"\${SQUASH_CTR}\"
-        podman rmi '"${PAYLOAD_IMAGE}"' || true
-
-        echo 'Importing Dakota OCI image into squashfs containers-storage...'
+        # ── VFS import ────────────────────────────────────────────────────────
+        # The OCI archive was created by the outer recipe (buildah, above).
+        # skopeo runs inside the installer container so the VFS tar-split
+        # metadata is written in the JSON format the live ISO can read.
+        echo 'Importing OCI image into squashfs containers-storage...'
         echo '=== Disk space before VFS import ==='
         df -h '${OUTPUT_DIR}'
         if [[ '$WORKDIR' != '$OUTPUT_DIR' ]]; then

@@ -34,9 +34,9 @@ jobs:
       matrix:
         include:
           - variant: bluefin
-            payload_image: ghcr.io/ublue-os/bluefin-nvidia-open:stable
-            live_target: bluefin-nvidia-open
-            registry: ublue-os
+            payload_image: ghcr.io/projectbluefin/bluefin-nvidia:stable
+            live_target: bluefin-nvidia
+            registry: projectbluefin
             tag: stable
             iso_name: bluefin-live
           - variant: bluefin-lts
