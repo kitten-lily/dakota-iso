@@ -615,3 +615,37 @@ before `buildah commit --squash`.
 **Rule:** Any time `justfile`'s `iso-sd-boot` injects config into the
 squashed OCI payload, `scripts/build-live-squashfs.sh` must apply the
 same injection. They must stay in sync.
+
+### Non-composefs variants use OCI layout, not VFS squash (2026-06)
+
+Dakota (composefs) embeds the payload as VFS containers-storage inside the squashfs.
+This path does not work for Fedora/Silverblue images (bluefin, bluefin-lts, bluefin-lts-hwe)
+because squashing destroys the ostree commit structure bootc requires, producing:
+```
+Expected commit object, not File
+```
+
+Fix: `build-live-squashfs.sh` detects `composeFsBackend` from `recipe.json` and:
+- **composefs = true** (dakota): squash → VFS containers-storage (unchanged)
+- **composefs = false** (bluefin/*): store OCI layout directly at `/var/lib/containers/oci-store`
+
+`configure-live.sh` writes the recipe accordingly:
+- composefs: `"image": "containers-storage:<ref>"`
+- non-composefs: `"image": "oci:/var/lib/containers/oci-store"`
+
+fisherman needs the `bootcDirectOCI` code path (projectbluefin/fisherman dev→prod merge,
+bootc-installer PR #192) to handle `oci:` source refs.
+
+### fisherman prod branch must be kept in sync with dev (2026-06)
+
+`projectbluefin/fisherman` has two branches: `dev` (active development) and `prod`
+(what bootc-installer submodule points at). They diverge and must be explicitly merged.
+
+To land dev fixes in a released bootc-installer:
+1. `git checkout origin/prod && git merge dev --no-ff` (resolve any conflicts)
+2. `git push origin HEAD:prod`
+3. Update fisherman submodule in `projectbluefin/bootc-installer` to the new prod SHA
+4. Open a PR in bootc-installer → CI builds and publishes a new Flatpak release
+
+The fisherman submodule in bootc-installer points to `prod`, not `dev`. Changes on `dev`
+do **not** automatically land in released installer builds.

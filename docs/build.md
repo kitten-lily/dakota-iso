@@ -273,3 +273,27 @@ argo_logs_workflow name=<name> namespace=argo tailLines=100
 **Do NOT manually push ISOs to R2.** Let CI handle all R2 uploads.
 The `latest` pointer is the production artifact — only CI may write it after
 passing the boot verification gate. See `docs/r2-promotion.md`.
+
+### Variant image refs must be verified against the publishing workflow (2026-06)
+
+Never guess image names for a variant. Always verify what `projectbluefin` actually
+publishes by reading the `execute-release.yml` workflow in the source repo:
+
+```bash
+gh api repos/projectbluefin/bluefin-lts/contents/.github/workflows/execute-release.yml \
+  --jq '.content' | base64 -d | grep 'image'
+```
+
+The pattern for confirming a tag exists:
+```bash
+skopeo list-tags docker://ghcr.io/projectbluefin/<image> | python3 -c \
+  "import json,sys; print([t for t in json.load(sys.stdin)['Tags'] if t in ('stable','lts','latest')])"
+```
+
+`projectbluefin/bluefin-lts` publishes: `bluefin-lts:stable`, `bluefin-lts-hwe:stable`, `bluefin-lts-hwe-nvidia:stable`.
+There is no `bluefin-lts-nvidia` without `-hwe`. There is no `bluefin-gdx` in projectbluefin.
+
+### systemd-boot title comes from live_title file (2026-06)
+
+Each variant directory has a `live_title` file. `build-iso.sh` reads it via `--title`.
+To change what users see in the boot menu, edit that file — do not touch `build-iso.sh`.

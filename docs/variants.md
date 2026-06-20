@@ -8,7 +8,7 @@ How the Dakota ISO build target works.
 |---|---|---|---|---|---|
 | `dakota` | `projectbluefin/dakota-nvidia:stable` | same | systemd-boot | yes | btrfs |
 | `bluefin` | `projectbluefin/bluefin-nvidia:stable` | same | grub2 | no | btrfs |
-| `bluefin-lts` | `ublue-os/bluefin-gdx:lts` | same | grub | no | xfs |
+| `bluefin-lts` | `projectbluefin/bluefin-lts-hwe-nvidia:stable` | same | grub2 | no | xfs |
 | `bluefin-lts-hwe` | `projectbluefin/bluefin-lts-hwe-nvidia:stable` | same | grub2 | no | xfs | — *pending image publish* |
 
 There is one unified ISO: `dakota-live.iso`.
@@ -115,3 +115,42 @@ Bluefin and bluefin-lts-hwe are Fedora Silverblue bootc images. Key differences 
 ```bash
 cat <variant>/payload_ref | tr -d '[:space:]'
 ```
+
+### bluefin-lts payload_ref was pointing at ublue-os org (2026-06)
+
+The `bluefin-lts` variant was created with stale `ublue-os/bluefin-gdx` refs from before
+the migration to `projectbluefin`. The correct images are:
+
+```
+bluefin-lts/payload_ref             → ghcr.io/projectbluefin/bluefin-lts-hwe-nvidia:stable
+bluefin-lts/registry                → projectbluefin
+live/src/bluefin-lts/base_imgref    → ghcr.io/projectbluefin/bluefin-lts:stable
+live/src/bluefin-lts/nvidia_imgref  → ghcr.io/projectbluefin/bluefin-lts-hwe-nvidia:stable
+```
+
+`projectbluefin/bluefin-lts` publishes no standalone `-nvidia` image — the nvidia/HWE
+variant is `bluefin-lts-hwe-nvidia:stable`. Always verify published images with:
+```bash
+skopeo list-tags docker://ghcr.io/projectbluefin/<image>
+```
+or read the `execute-release.yml` workflow in `projectbluefin/bluefin-lts` to see
+what images are actually promoted to `:stable`.
+
+`bluefin-gdx` is a legacy `ublue-os` image name and does not exist in `projectbluefin`.
+Never use it.
+
+### systemd-boot title is controlled by live_title file (2026-06)
+
+Each variant directory contains a `live_title` file whose contents appear verbatim
+as the boot menu entry in systemd-boot and loopback.cfg:
+
+```
+bluefin/live_title          → Bluefin Live
+bluefin-lts/live_title      → Bluefin LTS Live
+bluefin-lts-hwe/live_title  → Bluefin LTS HWE Live
+dakota/live_title            → Dakota Live
+```
+
+`build-iso.sh` accepts `--title <string>`; the justfile reads `<target>/live_title`
+and passes it. To customise the title for a new variant, create a `live_title` file
+in the variant directory.

@@ -108,6 +108,8 @@ Do not assume you know the build system, disk space requirements, or CI constrai
 | Install fails: `does not resolve to an image ID` | [`docs/ci.md`](docs/ci.md) — VFS store not embedded |
 | CI pipeline changes | [`docs/ci.md`](docs/ci.md) |
 | R2 promotion / named releases | [`docs/r2-promotion.md`](docs/r2-promotion.md) |
+| Variant image refs look wrong or reference `ublue-os` | [`docs/variants.md`](docs/variants.md) — verify via `execute-release.yml` in source repo |
+| systemd-boot title is wrong | [`<variant>/live_title`](docs/variants.md) — edit the `live_title` file in the variant dir |
 
 ### 2. Verification Gate
 
@@ -226,6 +228,11 @@ The unified dakota ISO must be **~5.3 GB** with `SUPERISO_COMPRESSION=release`.
 **NEVER create issues, pull requests, comments, forks, webhook calls, API writes, automated reports, or any other programmatic action targeting any `ublue-os/*` repository.**
 
 Read-only `gh api` calls to inspect `ublue-os` repos are permitted. No writes of any kind.
+
+**`ublue-os` image names are legacy.** All active images have migrated to `ghcr.io/projectbluefin/`.  
+Never write `ublue-os` into a `payload_ref`, `base_imgref`, `nvidia_imgref`, or `images.json`.  
+If you see a `ublue-os` ref in source, it is a stale artifact — replace it with the correct `projectbluefin` image.  
+Verify the correct name before replacing: read `execute-release.yml` in the source repo or run `skopeo list-tags`. Do **not** guess.
 
 ---
 
