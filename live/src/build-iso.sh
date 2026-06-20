@@ -51,10 +51,12 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --store) STORE_SFS="${2:?--store requires a path}"; shift 2 ;;
         --arch)  ARCH_SPECS+=("${2:?--arch requires arch:boot-tar:squashfs}"); shift 2 ;;
+        --title) LIVE_TITLE="${2:?--title requires a string}"; shift 2 ;;
         *)       break ;;
     esac
 done
 
+LIVE_TITLE="${LIVE_TITLE:-Dakota Live}"
 LABEL="DAKOTA_LIVE"
 MULTI_ARCH=false
 
@@ -175,7 +177,7 @@ if [[ "${MULTI_ARCH}" == "true" ]]; then
         # Per-arch BLS entry with rd.live.squashimg pointing to the correct squashfs
         local_console="${SERIAL_CONSOLE[${arch}]:-ttyS0}"
         cat > "${ESP_STAGING}/loader/entries/dakota-live-${arch}.conf" << EOF
-title   Dakota Live (${arch})
+title   ${LIVE_TITLE} (${arch})
 linux   /images/pxeboot/${arch}/vmlinuz
 initrd  /images/pxeboot/${arch}/initrd.img
 options root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8
@@ -211,7 +213,7 @@ EOF
             IFS=':' read -r arch _bt _sf <<< "${spec}"
             local_console="${SERIAL_CONSOLE[${arch}]:-ttyS0}"
             cat << EOF
-menuentry "Dakota Live (${arch})" {
+menuentry "${LIVE_TITLE} (${arch})" {
     linux /images/pxeboot/${arch}/vmlinuz root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8 rd.dakota.isofile=\${iso_path}
     initrd /images/pxeboot/${arch}/initrd.img
 }
@@ -278,7 +280,7 @@ EOF
     #                                last so it wins /dev/console on hardware where both UARTs exist
     #   Both consoles listed: Linux silently ignores the one that doesn't exist on the running arch.
     cat > "${ESP_STAGING}/loader/entries/dakota-live.conf" << EOF
-title   Dakota Live
+title   ${LIVE_TITLE}
 linux   /images/pxeboot/vmlinuz
 initrd  /images/pxeboot/initrd.img
 options root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8
@@ -294,7 +296,7 @@ EOF
     cp "${VMLINUZ}" "${ISO_ROOT}/images/pxeboot/vmlinuz"
     cp "${INITRD}"  "${ISO_ROOT}/images/pxeboot/initrd.img"
     cat > "${ISO_ROOT}/boot/grub/loopback.cfg" << EOF
-menuentry "Dakota Live" {
+menuentry "${LIVE_TITLE}" {
     linux /images/pxeboot/vmlinuz root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8 rd.dakota.isofile=\${iso_path}
     initrd /images/pxeboot/initrd.img
 }
