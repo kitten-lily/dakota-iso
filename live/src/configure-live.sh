@@ -346,7 +346,7 @@ with open("$SCRIPT_DIR/etc/bootc-installer/recipe.json") as f:
 # image = source for fisherman/bootc install
 # For composefs (dakota): containers-storage: ref in the VFS store
 # For non-composefs (bluefin, lts): oci: path to the OCI layout in squashfs
-if [[ "$COMPOSEFS" == "true" ]]; then
+if "$COMPOSEFS" == "true":
     recipe["image"] = "containers-storage:$NVIDIA_IMGREF"
 else:
     recipe["image"] = "oci:/var/lib/containers/oci-store"
