@@ -343,12 +343,23 @@ import json, sys
 with open("$SCRIPT_DIR/etc/bootc-installer/recipe.json") as f:
     recipe = json.load(f)
 
-# imgref = base image — matched by _find_nvidia_imgref_for() in processor.py
-# local_imgref = nvidia image — overrides install source to offline store
+# image = source for fisherman/bootc install
+# For composefs (dakota): containers-storage: ref in the VFS store
+# For non-composefs (bluefin, lts): oci: path to the OCI layout in squashfs
+if [[ "$COMPOSEFS" == "true" ]]; then
+    recipe["image"] = "containers-storage:$NVIDIA_IMGREF"
+else:
+    recipe["image"] = "oci:/var/lib/containers/oci-store"
+recipe["targetImgref"] = "$BASE_IMGREF"
 recipe["imgref"] = "$BASE_IMGREF"
 recipe["local_imgref"] = "containers-storage:$NVIDIA_IMGREF"
 # Variant-specific bootloader and composefs backend
-recipe["bootloader"] = "$BOOTLOADER"
+# Normalise "grub" → "grub2": the bootloader file uses the short form but
+# fisherman's recipe validator requires "grub2" or "systemd".
+bootloader = "$BOOTLOADER"
+if bootloader == "grub":
+    bootloader = "grub2"
+recipe["bootloader"] = bootloader
 recipe["composeFsBackend"] = $([ "$COMPOSEFS" = "true" ] && echo "True" || echo "False")
 
 with open("/etc/bootc-installer/recipe.json", "w") as f:

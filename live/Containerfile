@@ -96,18 +96,33 @@ ARG DEBUG=0
 ENV TARGET=${TARGET} INSTALLER_CHANNEL=${INSTALLER_CHANNEL} DEBUG=${DEBUG}
 
 COPY --from=initramfs-builder /tmp/initramfs.img /tmp/initramfs.img
-# xfsprogs: copy mkfs.xfs AND its shared library deps so the binary actually
-# runs at install time (not just passes the preflight existence check).
-# Deps from: ldd /usr/sbin/mkfs.xfs on debian:sid (non-glibc only):
-#   libblkid.so.1, libuuid.so.1, libinih.so.1, liburcu.so.8
-COPY --from=initramfs-builder /usr/sbin/mkfs.xfs /usr/sbin/mkfs.xfs
+# xfsprogs runtime deps from Debian bookworm (libinih.so.1 notably):
+#   - Fedora ships libinih.so.0; recent xfsprogs (Fedora + Debian) requires .so.1
+#   - Copy to BOTH lib paths so both toolchains find it:
+#     /usr/lib/x86_64-linux-gnu/ → Debian-compiled binaries
+#     /usr/lib64/                → Fedora-compiled binaries
+# liburcu/libblkid/libuuid are already present in Fedora but harmless to have twice.
 COPY --from=initramfs-builder \
     /usr/lib/x86_64-linux-gnu/libinih.so.1 \
     /usr/lib/x86_64-linux-gnu/liburcu.so.8 \
     /usr/lib/x86_64-linux-gnu/libblkid.so.1 \
     /usr/lib/x86_64-linux-gnu/libuuid.so.1 \
     /usr/lib/x86_64-linux-gnu/
-COPY --from=initramfs-builder /usr/sbin/xfs_repair /usr/sbin/xfs_repair
+COPY --from=initramfs-builder /usr/lib/x86_64-linux-gnu/libinih.so.1 /usr/lib64/libinih.so.1
+COPY --from=initramfs-builder /usr/lib/x86_64-linux-gnu/liburcu.so.8 /usr/lib64/liburcu.so.8
+# Only install Debian mkfs.xfs binary for images using the Debian cross-build
+# initramfs (GNOME OS / dakota, dracut-status=debian).
+# For Fedora/CentOS images (native dracut), xfsprogs is already installed from
+# RPM (/usr/bin/mkfs.xfs). Installing the Debian binary over it breaks the
+# install because PATH finds /usr/sbin first and the Debian binary previously
+# landed there with wrong lib-path expectations.
+COPY --from=initramfs-builder /usr/sbin/mkfs.xfs /tmp/debian-mkfs.xfs
+COPY --from=initramfs-builder /usr/sbin/xfs_repair /tmp/debian-xfs_repair
+RUN if grep -q debian /tmp/dracut-status 2>/dev/null; then \
+        install -m755 /tmp/debian-mkfs.xfs /usr/sbin/mkfs.xfs && \
+        install -m755 /tmp/debian-xfs_repair /usr/sbin/xfs_repair; \
+    fi; \
+    rm -f /tmp/debian-mkfs.xfs /tmp/debian-xfs_repair
 # Ensure systemd-boot EFI binary is present for the live ISO builder regardless
 # of whether the target distro ships it (e.g. bluefin uses GRUB, not systemd-boot,
 # so the binary is absent from the base image but still needed for the live ISO).
