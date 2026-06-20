@@ -649,3 +649,22 @@ To land dev fixes in a released bootc-installer:
 
 The fisherman submodule in bootc-installer points to `prod`, not `dev`. Changes on `dev`
 do **not** automatically land in released installer builds.
+
+### Workflow matrix must be kept in sync with variant config files (2026-06)
+
+`build-iso-bluefin.yml` has a `strategy.matrix` that hardcodes `payload_image`,
+`live_target`, `registry`, and `tag` per variant. These same values live in the
+variant config files (`bluefin-lts/payload_ref`, `bluefin-lts/registry`, etc.).
+
+**They can and do drift independently.**
+
+When `dc5489d` fixed `bluefin-lts/payload_ref` → `projectbluefin/bluefin-lts-hwe-nvidia:stable`,
+the corresponding matrix entry (`ghcr.io/ublue-os/bluefin-gdx:lts`) was not updated.
+Any `bluefin-lts` build that ran after that commit would silently pull the stale `ublue-os` image.
+
+**Rule:** Every change to a variant config file (`payload_ref`, `registry`, `live_target`)
+must be accompanied by the matching matrix update in `build-iso-bluefin.yml` in the same commit.
+
+**Long-term fix (Design Gate — requires human approval):** Remove the duplication by having
+the matrix read config values from the variant files at build time instead of hardcoding them.
+Until that refactor lands, keep the matrix and config files in sync manually on every change.
