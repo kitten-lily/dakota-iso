@@ -121,11 +121,9 @@ Key rules (full policy in that file):
 - **"ISO booted" is not proof.** Only a completed install + installed-system boot proves the pipeline works.
 
 Before submitting a PR:
-- Run `just debug=1 iso-sd-boot <target>` locally
+- Run `just debug=1 iso-sd-boot <target>` locally (or `just container <target>` for container-only changes)
 - Run `just plain-test-qemu <target>` — must exit with `✅ Installed system boot verified`
-- If the change touches `justfile` or `scripts/build-live-squashfs.sh`: test **both** a composefs variant (`dakota`) and a non-composefs variant (`bluefin`)
-- **Do not trigger CI as a substitute for local testing.** CI takes 60-90 min. Local tests take 20-30 min and tell you the same thing faster.
-- Only trigger CI after local tests pass.
+- Only trigger CI after local tests pass
 - PR description must state what you built and that it booted
 
 ### 3. Justfile Integrity Gate
