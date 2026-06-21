@@ -428,3 +428,19 @@ Go binary containing `[fisherman] version:` strings and LUKS/flatpak/composefs l
 `build-iso-bluefin.yml` previously checked `var/lib/containers/storage/vfs-images` (VFS path).
 Bluefin/lts-hwe use `composeFsBackend=false` and embed at `var/lib/containers/oci-store`.
 Fixed to check `var/lib/containers/oci-store/index.json` instead.
+
+### Non-composefs OCI must squash to 1 layer before embedding (2026-06-21)
+
+**What failed:** bluefin and bluefin-lts-hwe ISOs built at 12 GB instead of ~6 GB.
+
+**Why:** `buildah commit --format oci` without `--squash` in the non-composefs path embeds all ~120 OCI layers as individual blobs into `var/lib/containers/oci-store` inside the squashfs. Each layer is ~60–80 MB uncompressed; 120 layers → ~8 GB OCI store inside a ~6 GB rootfs → 12 GB squashfs → 12 GB ISO.
+
+**Fix:** Both `justfile` and `scripts/build-live-squashfs.sh` non-composefs paths must use `--squash --format oci`:
+
+```bash
+buildah commit --squash --format oci "${INJECT_CTR}" "oci:${OCI_DIR}:${OCI_IMAGE}"
+```
+
+Squashing reduces the OCI store to a single ~4 GB layer → ~6 GB final ISO.
+
+**NEVER remove `--squash` from this path.** The dakota (composefs) path squashes for VFS import; the bluefin (non-composefs) path squashes before OCI layout copy. Both paths squash.

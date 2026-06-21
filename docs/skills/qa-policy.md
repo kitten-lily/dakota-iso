@@ -208,3 +208,13 @@ matches the error message from the fisherman version in the live ISO.
 - [ ] ISO size is in expected range (dakota ~5.5 GB fast / ~4.5 GB release; bluefin ~7 GB fast / ~6 GB release)
 - [ ] GPT type GUID = `28732ac1` (EFI System Partition)
 - [ ] If change touches non-composefs path: verified on `bluefin` or `bluefin-lts-hwe`, not just `dakota`
+
+### Always test non-composefs variants separately (2026-06-21)
+
+**What failed:** A fix was verified on `dakota` (composefs) but `bluefin` (non-composefs) had a separate code path in both `justfile` and `scripts/build-live-squashfs.sh` that was wrong. CI was triggered without local testing of the non-composefs path.
+
+**Rule:** Any change to `justfile` or `scripts/build-live-squashfs.sh` must be tested on **both**:
+- a composefs variant: `just debug=1 iso-sd-boot dakota && just plain-test-qemu dakota`
+- a non-composefs variant: `just debug=1 iso-sd-boot bluefin && just plain-test-qemu bluefin`
+
+Do not trigger CI as a substitute. Local tests take 20-30 min; CI takes 60-90 min and gives no faster signal.
