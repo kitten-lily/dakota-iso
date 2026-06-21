@@ -1,137 +1,160 @@
 # Install Failure Reference
 
-Root causes of "ISO boots but installed system does not boot" failures, in order
-of most-likely to least-likely.  Ordered by symptom for fast lookup.
+Root causes for "ISO boots but installed system does not boot / install fails."
+Read this before touching squashfs builds, recipe.json, or fisherman integration.
 
 ---
 
-## Symptom: installed system drops to emergency shell
+## STATUS (as of 2026-06-21)
 
-### Root cause 1: COMPOSEFS_BACKEND detection bug (FIXED in d974a1e)
+| Variant | Status | Note |
+|---|---|---|
+| dakota | ✅ WORKS | plain-e2e-test3.log verified |
+| bluefin | ❌ ENOSPC at install — FIX IN configure-live.sh (unverified) | see below |
+| bluefin-lts-hwe | ❌ NOT TESTED | same fix applies |
 
-**What happened:**
-`scripts/build-live-squashfs.sh` detected composefs by running:
+---
+
+## Failure 1: bluefin/lts-hwe ENOSPC during install (ROOT CAUSE + FIX)
+
+### What breaks
+
+Installer completes squashfs boot fine. fisherman starts, begins install, then:
+```
+Error: open /var/lib/containers/storage/vfs/dir/<id>/sysroot/ostree/...: no space left on device
+```
+
+### Why
+
+fisherman non-composefs path (when `composeFsBackend=false`) does:
+1. `podman run ... -v /var/lib/containers:/var/lib/containers ... <image-ref> bootc install`
+2. podman pulls `oci:/var/lib/containers/oci-store` → VFS driver creates a full copy of the
+   ~9 GB squashed image as a writable container layer at `/var/lib/containers/storage/vfs/dir/`
+3. That path is on the live system's overlayfs upper dir (tmpfs / RAM) → ENOSPC
+
+### The fix (applied in configure-live.sh)
+
+fisherman v0.2.0+ reads `additionalImageStores` from recipe.json.
+When set, `appendImageStoreArgs()` in fisherman writes a containers/storage config:
+```toml
+[storage]
+driver = "overlay"
+[storage.options]
+additionalimagestores = ["/var/lib/containers/oci-store"]
+```
+and passes it as `CONTAINERS_STORAGE_CONF` into the podman container.
+bootc finds the image via additionalimagestores (read-only, no copy) — no ENOSPC.
+
+**Fix location:** `live/src/configure-live.sh` recipe.json generation, non-composefs branch:
+```python
+recipe["additionalImageStores"] = ["/var/lib/containers/oci-store"]
+```
+
+**This fix has been applied but NOT yet tested end-to-end.**
+Next agent: build a bluefin ISO and run `just plain-test-qemu bluefin`.
+
+### What NOT to do
+
+- Do NOT squash or not-squash OCI layers to fix this. Layers don't matter.
+- Do NOT add extra QEMU disks, bind mounts, or scratch volumes to the test harness.
+- Do NOT change fisherman upstream. The fix is in recipe.json configuration.
+- Do NOT use `installer_channel=dev` for bluefin — dev fisherman ignores `bootloader: grub2`.
+
+---
+
+## Failure 2: installed system drops to emergency shell (FIXED in d974a1e)
+
+**Symptom:** `dracut Warning: Refusing to install. ...` or `Cannot mount root` in serial log.
+
+**Root cause:** COMPOSEFS_BACKEND detection in `scripts/build-live-squashfs.sh` always returned
+false. Dakota (composefs=true) was embedded as OCI layout instead of VFS containers-storage.
+fisherman found no image in containers-storage → pulled uninjected image from network →
+image lacked `root-mount-spec = "LABEL=root"` → wrong `root=` in BLS entry → initramfs
+could not mount root → emergency shell.
+
+**Fix:** Replaced `sh -c 'python3 -c "..."'` with `python3 -c '...'` in build-live-squashfs.sh.
+The outer `sh -c` split on inner double-quotes, breaking the python3 invocation.
+
+**Verified fixed:** plain-e2e-test3.log (2026-06-21) `✅ Installed system boot verified`.
+
+---
+
+## Failure 3: live ISO drops to emergency shell / never reaches installer (FIXED in d974a1e)
+
+**Symptom:** QEMU boots ISO, dracut error before installer appears.
+`dracut Warning: /sysroot has no proper rootfs layout` or similar.
+
+**Root cause:** CI debug ISO rebuild in `build-iso.yml` ran:
 ```bash
-sh -c 'python3 -c "import json; print(json.load(open("/etc/bootc-installer/recipe.json"))...)"'
+mksquashfs ... -wildcards -e sys -e dev
 ```
-The outer `sh -c '...'` split the string at the first inner `"`, so python3 received
-broken arguments → returned non-zero → `COMPOSEFS_BACKEND` was set `false` for ALL
-variants including dakota (which should be `true`).
+With `-wildcards`, `-e sys` removes the `sys/` directory node entirely.
+`dmsquash-live-root.sh` requires `proc/`, `sys/`, `dev/` to exist as directories.
 
-**Effect:**
-- Dakota went through the non-composefs OCI layout path: embedded as
-  `/var/lib/containers/oci-store` instead of VFS containers-storage.
-- `recipe.json` correctly said `image: "containers-storage:..."` (set by
-  `configure-live.sh` based on the `composefs` file in the variant dir).
-- Fisherman inspected containers-storage → NOT FOUND → pulled uninjected image
-  from `ghcr.io` (network) or failed entirely.
-- The network-pulled image lacked the injected `root-mount-spec = "LABEL=root"`
-  in `/usr/lib/bootc/install/00-defaults.toml`.
-- `bootc install` used default root-mount-spec → boot entry had wrong `root=` param
-  → initramfs could not mount root → emergency shell.
-
-**Fix:** Replace `sh -c 'python3 -c "..."'` with `python3 -c '...'` directly.
-See `scripts/build-live-squashfs.sh` around the `COMPOSEFS_BACKEND` detection block.
-
-**Verification:** `plain-e2e-test3.log` (Jun 21 2026) — `✅ Installed system boot verified`.
+**Fix:** `mkdir -p sys/ dev/` before mksquashfs, change to `-e "sys/*" -e "dev/*"`.
+Same fix is in `scripts/build-live-squashfs.sh` (applies to all builds).
 
 ---
 
-## Symptom: installed system cannot find bootloader (UEFI falls to PXE)
+## Failure 4: installed system has no bootloader / UEFI falls to PXE
 
-### Root cause: fisherman dev channel ignores `bootloader: grub2` in recipe.json
+**Symptom:** installed system QEMU shows UEFI PXE timeout, never boots.
 
-**Observed:**
-```
-"Detected bootloader"
-"Installing bootloader via systemd-boot"
-"Warning: could not ensure systemd-boot EFI binary: systemd-bootx64.efi not found under
- /mnt/fisherman-target/{ostree,sysroot/ostree}"
-```
-UEFI firmware then falls through to PXE boot entries → timeout.
+**Root cause:** `installer_channel=dev` fisherman ignores `bootloader: grub2` in recipe.json
+and auto-detects systemd-boot. Bluefin uses grub2; `systemd-bootx64.efi` is not present →
+no EFI binary written → UEFI has nothing to boot.
 
-**What happened:**
-- `output/bluefin/bluefin-live.iso` recipe.json correctly says `"bootloader": "grub2"`.
-- Fisherman dev channel ignored this field and auto-detected `systemd-boot`.
-- Bluefin uses grub2: `systemd-bootx64.efi` not present → no EFI binary written.
-- Fresh OVMF VARS (no NVRAM entries) → UEFI falls to PXE → timeout.
-
-**Affected:** bluefin and bluefin-lts-hwe variants with `installer_channel=dev`.
-
-**Workaround:** Use `installer_channel=stable` for grub2 variants.  
-**Fix needed upstream:** tuna-os/fisherman or tuna-os/tuna-installer must respect
-`"bootloader"` field in recipe.json regardless of auto-detection result.
-
-**CI gap:** `build-iso-bluefin.yml` only verifies live ISO boots — it has no install
-E2E.  `test-plain-install.yml` only tests the `dakota` variant.  A bluefin install
-E2E does not exist.  Until one is added, bluefin install regressions will not be
-caught automatically.
+**Fix:** Use `installer_channel=stable` for bluefin/lts-hwe variants. Never use dev channel
+for grub2 variants until tuna-os/fisherman fixes recipe.json bootloader field handling.
 
 ---
 
-## Symptom: live ISO drops to emergency shell (never reaches installer)
+## Variant configuration reference
 
-### Root cause: debug ISO mksquashfs removes sys/ and dev/ directory nodes (FIXED in d974a1e)
+| Variant | bootloader | composeFsBackend | image in recipe.json | additionalImageStores |
+|---|---|---|---|---|
+| dakota | systemd | true | `containers-storage:ghcr.io/projectbluefin/dakota-nvidia:stable` | (none) |
+| bluefin | grub2 | false | `oci:/var/lib/containers/oci-store` | `["/var/lib/containers/oci-store"]` |
+| bluefin-lts-hwe | grub2 | false | `oci:/var/lib/containers/oci-store` | `["/var/lib/containers/oci-store"]` |
 
-**What happened:**
-`build-iso.yml` debug ISO rebuild ran:
+All variants: filesystem=btrfs. XFS is a UI option only, never the default.
+
+Config files controlling this (read by configure-live.sh at container build time):
+- `live/src/<variant>/composefs` — "true" or "false"
+- `live/src/<variant>/bootloader` — "grub" (normalized to "grub2") or "systemd"
+
+---
+
+## How to verify a working install
+
 ```bash
-mksquashfs ... -wildcards -e proc -e sys -e dev ...
+just debug=1 iso-sd-boot bluefin
+just plain-test-qemu bluefin
+# Must end with: ✅ Installed system boot verified
 ```
-With `-wildcards` active, `-e sys` and `-e dev` remove the **directory nodes** themselves,
-not just their contents.  `dmsquash-live-root.sh` then fails:
-- If squashfs has `LiveOS/proc` but no `sys/` or `dev/` → `usable_root()` fallback fails.
-- Error: `dracut Warning: /sysroot has no proper rootfs layout`.
 
-`plain-boot-qemu-live` prefers `<target>-debug-live.iso` over the production ISO, so
-CI was always booting the broken debug ISO.
-
-**Fix:**
-```bash
-mkdir -p sys/ dev/
-mksquashfs ... -wildcards -e "sys/*" -e "dev/*" ...
-```
-The `mkdir -p` ensures empty directory nodes exist; `"dir/*"` excludes only contents.
+"ISO booted" is not proof. Only a completed install + installed-system boot proves it.
 
 ---
 
-## Variant configuration correctness reference
+## How fisherman uses additionalImageStores (for future reference)
 
-| Variant | `bootloader` | `composeFsBackend` | `image` in recipe.json |
-|---|---|---|---|
-| dakota | systemd | true | `containers-storage:ghcr.io/projectbluefin/dakota-nvidia:stable` |
-| bluefin | grub2 | false | `oci:/var/lib/containers/oci-store` |
-| bluefin-lts-hwe | grub2 | false | `oci:/var/lib/containers/oci-store` |
+Source: `tuna-os/fisherman/fisherman/internal/install/bootc.go`
 
-All variants default to btrfs.  XFS is available as a UI option only — never the
-default.  See stored memory: "filesystem defaults".
+`appendImageStoreArgs()` is called when `NeedsContainerStorageMount(opts)` is true
+(i.e., `!ComposeFsBackend`). If `opts.AdditionalImageStores` is non-empty, it:
+1. Writes a storage.conf to `scratchDir/fisherman-conf/storage-*.conf`:
+   ```toml
+   [storage]
+   driver = "overlay"
+   [storage.options]
+   additionalimagestores = ["<path>"]
+   ```
+2. Bind-mounts each store path read-only into the container at the same host path
+3. Sets `CONTAINERS_STORAGE_CONF` to the container-side path of the storage.conf
 
----
+Result: bootc inside the container sees the OCI store as an additionalimagestore via
+overlay driver. No VFS copy, no ENOSPC.
 
-## How to diagnose a new install failure
-
-1. **Get the serial log.** The install log and post-install serial log are the
-   primary evidence.  Look for the BLS entry to see actual `root=` and `composefs=`
-   params written by `bootc install`.
-
-2. **Check fisherman's `--bootloader` and `--composefs-backend` flags.**  They must
-   match the variant's recipe.json.  If they don't, the ISO has a wrong recipe.json
-   OR fisherman is ignoring it.
-
-3. **Check the `image:` field in recipe.json vs what's embedded:**
-   - composefs (dakota): `containers-storage:...` → VFS at `/var/lib/containers/storage`
-   - non-composefs: `oci:/var/lib/containers/oci-store`  
-   Mismatch → fisherman pulls from network → uninjected image → wrong root-mount-spec.
-
-4. **Check `root-mount-spec` injection.**  The squashfs build injects
-   `root-mount-spec = "LABEL=root"` into `/usr/lib/bootc/install/00-defaults.toml`
-   inside the embedded image.  If fisherman uses a network-pulled image, this
-   injection is missing.
-
-5. **Verify filesystem label.**  The btrfs root partition must have LABEL=root for
-   `root=LABEL=root` in the BLS entry to work.  This is set by fisherman during
-   partitioning based on the root-mount-spec; if the spec was wrong the label is wrong.
-
-6. **Check `storage.conf` on the live ISO:**  Must have `driver = "vfs"` (all variants)
-   so containers-storage reads from the VFS store embedded in the squashfs.  If `driver`
-   is missing or set to `overlay`, containers-storage cannot read the embedded image.
+fisherman reads `additionalImageStores` from recipe.json into `opts.AdditionalImageStores`.
+This is the correct field to set. No code changes to fisherman are needed.

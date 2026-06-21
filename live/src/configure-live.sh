@@ -350,8 +350,20 @@ if "$COMPOSEFS" == "true":
     recipe["image"] = "containers-storage:$NVIDIA_IMGREF"
     recipe["local_imgref"] = "containers-storage:$NVIDIA_IMGREF"
 else:
+    # Non-composefs (bluefin, lts-hwe): OCI layout embedded at /var/lib/containers/oci-store.
+    # image="oci:..." tells fisherman to use the OCI layout directly.
+    # additionalImageStores tells fisherman to pass the OCI store as an
+    # containers/storage additionalimagestores entry (overlay driver, read-only).
+    # This avoids fisherman doing `podman pull oci:...` which copies the full
+    # ~9 GB image into VFS containers-storage on the live tmpfs → ENOSPC.
+    # fisherman >= v0.2.0 reads additionalImageStores from recipe.json and calls
+    # appendImageStoreArgs() which writes a storage.conf with:
+    #   driver = "overlay"
+    #   additionalimagestores = ["/var/lib/containers/oci-store"]
+    # bootc then finds the image via additionalimagestore without any copy.
     recipe["image"] = "oci:/var/lib/containers/oci-store"
     recipe["local_imgref"] = "oci:/var/lib/containers/oci-store"
+    recipe["additionalImageStores"] = ["/var/lib/containers/oci-store"]
 recipe["targetImgref"] = "$BASE_IMGREF"
 recipe["imgref"] = "$BASE_IMGREF"
 # All variants default to btrfs. XFS is available as a UI option only.
