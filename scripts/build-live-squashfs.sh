@@ -231,10 +231,13 @@ mkdir -p "$(dirname "${OUTPUT_SFS}")"
 # dmsquash-live-root (Debian bookworm dracut) uses the squashfs directly as the
 # live rootfs when it finds a /proc directory at the squashfs root.  Without it,
 # it falls through to die "Failed to find a root filesystem".
-# Ensure proc exists as an empty directory and exclude only its CONTENTS.
+# dracut's usable_root() requires ALL of proc/, sys/, and dev/ to exist at the
+# squashfs root (the ld-*.so glob doesn't match modern glibc's ld-linux-x86-64.so.2).
+# Ensure all three exist as empty directories and exclude only their CONTENTS.
 # NOTE: do not use "-e proc" — newer mksquashfs (4.7+) removes the directory
 # itself when given a bare "-e proc", while older versions kept an empty dir.
-mkdir -p "${SFS_ROOT}/proc"
+# Same applies to sys and dev.
+mkdir -p "${SFS_ROOT}/proc" "${SFS_ROOT}/sys" "${SFS_ROOT}/dev"
 
 mksquashfs "${SFS_ROOT}" "${OUTPUT_SFS}" \
     -noappend -comp zstd \
@@ -242,7 +245,7 @@ mksquashfs "${SFS_ROOT}" "${OUTPUT_SFS}" \
     -b "${SFS_BLOCK}" \
     -processors 4 \
     -wildcards \
-    -e "proc/*" -e sys -e dev -e run -e tmp
+    -e "proc/*" -e "sys/*" -e "dev/*" -e run -e tmp
 echo ">>> [live-squashfs] squashfs: $(du -sh "${OUTPUT_SFS}" | cut -f1)"
 
 echo ">>> [live-squashfs] exporting boot files tar ..."

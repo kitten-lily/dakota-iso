@@ -360,14 +360,15 @@ iso-sd-boot target:
 
         # mksquashfs >= 4.7 removes directories with plain -e; use -wildcards -e "dir/*"
         # to exclude only contents, keeping the empty dir. dmsquash-live-root requires
-        # proc/ to exist at the squashfs root to recognise it as a live rootfs.
-        mkdir -p \"\${SQUASHFS_ROOT}/proc\"
+        # proc/ at the squashfs root to recognise it as a live rootfs. dracut's
+        # usable_root() requires all of proc/, sys/, and dev/ to exist.
+        mkdir -p \"\${SQUASHFS_ROOT}/proc\" \"\${SQUASHFS_ROOT}/sys\" \"\${SQUASHFS_ROOT}/dev\"
         SFS_LEVEL=3; SFS_BLOCK=131072
         [[ '{{compression}}' == 'release' ]] && { SFS_LEVEL=15; SFS_BLOCK=1048576; }
         mksquashfs \"\${SQUASHFS_ROOT}\" '${SQUASHFS}' \
             -noappend -comp zstd -Xcompression-level \${SFS_LEVEL} -b \${SFS_BLOCK} \
             -processors 4 \
-            -wildcards -e "proc/*" -e sys -e dev -e run -e tmp
+            -wildcards -e "proc/*" -e "sys/*" -e "dev/*" -e run -e tmp
 
         # Export only boot files needed for ESP assembly
         tar -C \"\$MOUNT\" \
@@ -595,10 +596,10 @@ boot-iso-serial target:
     echo "SSH available on localhost:2222 (user: liveuser, password: live) if built with debug=1"
     "$QEMU" \
         -machine q35 \
-        -m 4096 \
+        -m {{qemu-mem}} \
         -accel kvm \
         -cpu host \
-        -smp 4 \
+        -smp {{qemu-smp}} \
         -drive if=pflash,format=raw,readonly=on,file="${OVMF_CODE}" \
         -drive if=pflash,format=raw,file="${OVMF_VARS}" \
         -drive if=none,id=live-disk,file="${ISO}",media=cdrom,format=raw,readonly=on \
@@ -885,7 +886,8 @@ luks-boot target:
 # 4096 is intentionally tight: the overlay tmpfs is only ~2 GiB, which
 # reliably triggers ENOSPC if fisherman writes scratch to /var/tmp instead
 # of the target disk.  Override with qemu-mem=8192 for interactive debugging.
-qemu-mem := "4096"
+qemu-mem := "8192"
+qemu-smp := "8"
 
 # QEMU install disk path (override with: just luks-qemu-disk=/path/to/disk.qcow2 ...)
 luks-qemu-disk := "/var/tmp/dakota-luks-install.qcow2"
@@ -1001,7 +1003,7 @@ luks-boot-qemu-live target:
         CPU_FLAG="-cpu qemu64"
     fi
     $QEMU_PREFIX "$QEMU" \
-        -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp 4 $QEMU_ACCEL \
+        -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp {{qemu-smp}} $QEMU_ACCEL \
         -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
         -drive "if=pflash,format=raw,file=${OVMF_VARS}" \
         -drive "if=none,id=iso,file=${ISO},media=cdrom,readonly=on,format=raw" \
@@ -1151,7 +1153,7 @@ luks-boot-qemu-installed target:
         CPU_FLAG="-cpu qemu64"
     fi
     $QEMU_PREFIX "$QEMU" \
-        -machine q35 $CPU_FLAG -m 8192 -smp 4 $QEMU_ACCEL \
+        -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp {{qemu-smp}} $QEMU_ACCEL \
         -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
         -drive "if=pflash,format=raw,file=${OVMF_VARS}" \
         -drive "if=none,id=disk,file={{luks-qemu-disk}},format=qcow2" \
@@ -1335,7 +1337,7 @@ plain-boot-qemu-live target:
     [[ "$QEMU_ACCEL" =~ tcg ]] && CPU_FLAG="-cpu qemu64"
     echo "Booting live ISO: $ISO (qemu-mem={{qemu-mem}} MiB)"
     $QEMU_PREFIX "$QEMU" \
-        -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp 4 $QEMU_ACCEL \
+        -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp {{qemu-smp}} $QEMU_ACCEL \
         -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
         -drive "if=pflash,format=raw,file=${OVMF_VARS}" \
         -drive "if=none,id=iso,file=${ISO},media=cdrom,readonly=on,format=raw" \
@@ -1484,7 +1486,7 @@ plain-boot-qemu-installed target:
     [[ "$QEMU_ACCEL" =~ tcg ]] && CPU_FLAG="-cpu qemu64"
     echo "Booting installed disk: {{plain-qemu-disk}} (qemu-mem={{qemu-mem}} MiB)"
     $QEMU_PREFIX "$QEMU" \
-        -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp 4 $QEMU_ACCEL \
+        -machine q35 $CPU_FLAG -m {{qemu-mem}} -smp {{qemu-smp}} $QEMU_ACCEL \
         -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
         -drive "if=pflash,format=raw,file=${OVMF_VARS}" \
         -drive "if=none,id=disk,file={{plain-qemu-disk}},format=raw,cache=unsafe" \

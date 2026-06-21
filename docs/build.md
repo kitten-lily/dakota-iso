@@ -330,16 +330,18 @@ sfdisk: /usr/lib/x86_64-linux-gnu/libblkid.so.1: version `BLKID_2_40' not found
 is backward-compatible with all earlier symbol versions. Only copy what is genuinely
 missing from the target base image.
 
-### mksquashfs -e proc removes empty dir in 4.7+ (2026-06)
+### mksquashfs -e proc/sys/dev removes empty dirs in 4.7+ (2026-06)
 
 `dmsquash-live-root` (Debian bookworm dracut) needs a `proc/` directory at the squashfs root to use the squashfs directly as the live rootfs. Without it: `FATAL: Failed to find a root filesystem in squashfs.img`.
 
-Old mksquashfs (≤4.6, Ubuntu 22.04/24.04 system package) with `-e proc` excluded proc's CONTENTS but kept the empty directory. mksquashfs ≥4.7 (homebrew, newer distros) removes the directory itself.
+dracut's `usable_root()` function also requires **all three** of `proc/`, `sys/`, and `dev/` at the squashfs root. On modern GNOME OS (glibc 2.38+), there is no `ld-2.XX.so` file — only `ld-linux-x86-64.so.2` (which does not match the `ld-*.so` glob). So the second fallback check (`proc sys dev` all exist) is the only path that works.
 
-Fix in `scripts/build-live-squashfs.sh`:
+Old mksquashfs (≤4.6, Ubuntu 22.04/24.04 system package) with `-e proc` excluded proc's CONTENTS but kept the empty directory. mksquashfs ≥4.7 (homebrew, newer distros) removes the directory itself. Same applies to `sys` and `dev`.
+
+Fix in `scripts/build-live-squashfs.sh` and `justfile`:
 ```bash
-mkdir -p "${SFS_ROOT}/proc"   # ensure empty proc/ exists
-mksquashfs ... -wildcards -e "proc/*" ...  # exclude contents only
+mkdir -p "${SFS_ROOT}/proc" "${SFS_ROOT}/sys" "${SFS_ROOT}/dev"  # ensure empty dirs exist
+mksquashfs ... -wildcards -e "proc/*" -e "sys/*" -e "dev/*" ...  # exclude contents only
 ```
 
 ### Non-composefs variants (bluefin, bluefin-lts-hwe): recipe.json fields that must be set (2026-06)
