@@ -327,3 +327,31 @@ Fix in `scripts/build-live-squashfs.sh`:
 mkdir -p "${SFS_ROOT}/proc"   # ensure empty proc/ exists
 mksquashfs ... -wildcards -e "proc/*" ...  # exclude contents only
 ```
+
+### Non-composefs variants (bluefin, bluefin-lts-hwe): recipe.json fields that must be set (2026-06)
+
+Two fields in recipe.json were missing/wrong for Fedora/CentOS variants, causing every install to fail:
+
+**1. `filesystem` was never set** — fisherman defaulted to xfs. All variants must install to btrfs.
+The fix: `configure-live.sh` now sets `recipe["filesystem"] = "btrfs"` for all variants.
+XFS is only available as a user option in the installer UI (`images.json` `"filesystems"` array).
+
+**2. `local_imgref` pointed at the wrong store** — non-composefs variants embed the payload as
+an OCI layout at `oci:/var/lib/containers/oci-store`, NOT as VFS containers-storage.
+The old code set `local_imgref = "containers-storage:<NVIDIA_IMGREF>"`, which pointed at a
+VFS store that doesn't exist for these variants. Fisherman could not find the offline image.
+
+Fix:
+```python
+if composefs == "true":
+    recipe["image"] = f"containers-storage:{nvidia_imgref}"
+    recipe["local_imgref"] = f"containers-storage:{nvidia_imgref}"
+else:
+    recipe["image"] = "oci:/var/lib/containers/oci-store"
+    recipe["local_imgref"] = "oci:/var/lib/containers/oci-store"
+recipe["filesystem"] = "btrfs"
+```
+
+**Rule: never test recipe changes with CI only.** Build the container locally, run
+`podman run --rm <image> cat /etc/bootc-installer/recipe.json` to verify the recipe,
+then do a local QEMU install test before pushing to CI.

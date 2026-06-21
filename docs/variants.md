@@ -8,7 +8,9 @@ How the Dakota ISO build target works.
 |---|---|---|---|---|---|
 | `dakota` | `projectbluefin/dakota-nvidia:stable` | same | systemd-boot | yes | btrfs |
 | `bluefin` | `projectbluefin/bluefin-nvidia:stable` | same | grub2 | no | btrfs |
-| `bluefin-lts-hwe` | `projectbluefin/bluefin-lts-hwe-nvidia:stable` | same | grub2 | no | xfs |
+| `bluefin-lts-hwe` | `projectbluefin/bluefin-lts-hwe-nvidia:stable` | same | grub2 | no | btrfs |
+
+**All variants default to btrfs. XFS is available as a user-selectable option in the installer UI only.**
 
 There is one unified ISO: `dakota-live.iso`.
 
