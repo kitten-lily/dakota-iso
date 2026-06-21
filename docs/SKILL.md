@@ -16,7 +16,8 @@ Agent entry point for `projectbluefin/dakota-iso`. Load only the skill(s) that m
 | Run any E2E test, verify a build, or make a verification claim | [`docs/skills/qa-policy.md`](skills/qa-policy.md) |
 | **Building ISOs** | |
 | Build ISOs locally, disk space, BTRFS/XFS quirks | [`docs/build.md`](build.md) |
-| Unified nvidia ISO — size, compression, nvidia_imgref | [`docs/build.md`](build.md) |
+| Unified nvidia ISO — size, compression, composefs vs non-composefs variants | [`docs/build.md`](build.md) |
+| ISO is wrong size, won't boot, install fails | [`docs/build.md`](build.md) → ISO size table at top |
 | Add or modify variants (`payload_ref` pattern) | [`docs/variants.md`](variants.md) |
 | **Architecture** | |
 | Two-container pipeline, boot flow, squashfs, VFS storage | [`docs/architecture.md`](architecture.md) |

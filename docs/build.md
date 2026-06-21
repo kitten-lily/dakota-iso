@@ -2,15 +2,32 @@
 
 How to build Dakota live ISOs locally and the key variables that control the build.
 
+## Two variant types — understand this before changing anything
+
+This repo produces ISOs for two different OCI store layouts:
+
+| Variant | `composefs` | OCI store path | squash before embed? |
+|---|---|---|---|
+| `dakota` | `true` | `/var/lib/containers/storage` (VFS) | **yes** — squash to 1 layer |
+| `bluefin`, `bluefin-lts-hwe` | `false` | `/var/lib/containers/oci-store` (OCI layout) | **yes** — squash to 1 layer |
+
+**Both paths squash.** `buildah commit --squash --format oci` for non-composefs; `buildah commit --squash` (VFS) for composefs. Never use `--format oci` without `--squash`.
+
+Any change to `justfile` or `scripts/build-live-squashfs.sh` must be tested on **both** a composefs variant (`dakota`) and a non-composefs variant (`bluefin`). The code paths diverge and bugs in one are invisible when testing only the other.
+
 ## Quick start
 
 ```bash
-just iso-sd-boot dakota               # full build, stable installer
-just debug=1 installer_channel=dev iso-sd-boot dakota  # debug + dev installer
-just build-bg dakota                  # background build (survives terminal close)
+# Build and test dakota (composefs)
+just debug=1 iso-sd-boot dakota
+just plain-test-qemu dakota          # must exit: ✅ Installed system boot verified
+
+# Build and test bluefin (non-composefs) — required when changing justfile/build-live-squashfs.sh
+just debug=1 iso-sd-boot bluefin
+just plain-test-qemu bluefin
 ```
 
-Output: `output/dakota-live.iso` (~4.3 GB, ~20–40 min depending on network)
+Output: `output/<target>-live.iso`
 
 ## Key variables
 
