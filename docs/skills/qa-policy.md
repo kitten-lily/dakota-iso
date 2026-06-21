@@ -190,3 +190,21 @@ when fisherman's internal hostname write fails on composefs deployments. If you 
 `fisherman: fatal: writing hostname:` in the install log, the wrapper should handle it.
 If the wrapper exits non-zero anyway, check that the condition in `fisherman-install.sh`
 matches the error message from the fisherman version in the live ISO.
+
+---
+
+## Red Flags
+
+- Waiting for CI to verify a change instead of running `just debug=1 iso-sd-boot <target>` + `just plain-test-qemu <target>` locally first — CI takes 60-90 min; local tests take 20-30 min and give immediate feedback
+- Triggering CI without first confirming the ISO boots locally
+- Calling `task_complete` after CI is triggered but before a boot + install is verified
+- "CI is running" as a substitute for "I tested this"
+- Testing only `dakota` when a change touches both `justfile` and `scripts/build-live-squashfs.sh` — always test a non-composefs variant (`bluefin` or `bluefin-lts-hwe`) separately
+
+## Verification
+
+- [ ] `just debug=1 iso-sd-boot <target>` completes without error
+- [ ] `just plain-test-qemu <target>` exits with `✅ Installed system boot verified`
+- [ ] ISO size is in expected range (dakota ~5.5 GB fast / ~4.5 GB release; bluefin ~7 GB fast / ~6 GB release)
+- [ ] GPT type GUID = `28732ac1` (EFI System Partition)
+- [ ] If change touches non-composefs path: verified on `bluefin` or `bluefin-lts-hwe`, not just `dakota`
