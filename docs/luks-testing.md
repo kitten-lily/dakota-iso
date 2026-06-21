@@ -74,7 +74,7 @@ OVMF=/home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.0/share/qemu/edk2-x86_64-code.f
 VARS=/var/tmp/OVMF_VARS.fd; dd if=/dev/zero bs=1k count=256 of=$VARS 2>/dev/null
 qemu-img create -f qcow2 /var/tmp/dakota-install-disk.qcow2 50G
 
-$QEMU -machine q35 -m 4096 -accel kvm -cpu host -smp 4 \
+$QEMU -machine q35 -m 8192 -accel kvm -cpu host -smp 8 \
     -drive if=pflash,format=raw,readonly=on,file=$OVMF \
     -drive if=pflash,format=raw,file=$VARS \
     -drive if=none,id=live,file=output/dakota-live.iso,media=cdrom,format=raw,readonly=on \

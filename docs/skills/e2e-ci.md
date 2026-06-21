@@ -226,3 +226,41 @@ present. Use `ldd <binary>` on the source stage to enumerate them.
 
 **Rule:** The E2E filesystem must match the installer default. `images.json` sets `btrfs`
 as default — E2E uses `btrfs`. If this ever changes, update the E2E recipe too.
+
+---
+
+## QEMU resources — use 8 GiB RAM / 8 vCPUs for local testing (2026-06)
+
+**Symptom:** Local E2E installs take 30–60 min or time out.
+
+**Root cause:** The composefs install (`skopeo copy` + `bootc install to-filesystem --composefs-backend`) is CPU and I/O bound. At 4 GiB / 4 vCPUs the flatpak copy phase alone takes 20+ minutes.
+
+**Fix:** The `justfile` defaults are now `qemu-mem=8192` and `qemu-smp=8`. All `just plain-test-qemu` / `just luks-test-qemu` / `just e2e` recipes pick these up automatically. Override as needed:
+```bash
+just qemu-mem=16384 qemu-smp=16 plain-test-qemu dakota
+```
+
+Do not hardcode `-m 4096 -smp 4` in any new QEMU command — use `{{qemu-mem}}` / `{{qemu-smp}}` justfile variables.
+
+---
+
+## Live boot drops to dracut emergency shell — "no proper rootfs layout" (2026-06)
+
+**Symptom:** QEMU boots ISO, dracut mounts squashfs, then immediately drops to `dracut:/#` with:
+```
+dracut Warning: /sysroot has no proper rootfs layout, ignoring and removing offending mount hook
+```
+
+**Root cause:** `dracut-lib.sh:usable_root()` accepts a root if either:
+1. `$1/lib*/ld-*.so` glob matches (finds glibc dynamic linker), OR
+2. All three of `$1/proc`, `$1/sys`, `$1/dev` exist
+
+GNOME OS (glibc ≥2.38) ships `ld-linux-x86-64.so.2` — this does NOT match the `ld-*.so` glob. So path 2 is the only working path. The squashfs must have empty `sys/` and `dev/` at the root (alongside `proc/`).
+
+**mksquashfs 4.7+ removes bare-excluded directories.** Using `-e sys` removes the `sys/` dir entirely. The fix — applied in `justfile` and `scripts/build-live-squashfs.sh`:
+```bash
+mkdir -p "${SFS_ROOT}/proc" "${SFS_ROOT}/sys" "${SFS_ROOT}/dev"
+mksquashfs ... -wildcards -e "proc/*" -e "sys/*" -e "dev/*" ...
+```
+
+**Never use bare `-e sys -e dev -e proc`** on mksquashfs 4.7+. Always exclude with `-wildcards -e "dir/*"` to keep the empty directory.

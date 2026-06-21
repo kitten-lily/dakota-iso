@@ -2,6 +2,24 @@
 
 How the GitHub Actions workflows build, test, and publish Dakota ISOs.
 
+## ISOs produced
+
+Three NVIDIA-unified ISOs are built and published to R2:
+
+| ISO | Workflow | R2 latest name | Image embedded |
+|---|---|---|---|
+| Dakota | `build-iso.yml` | `dakota-live-latest.iso` | `projectbluefin/dakota-nvidia:stable` |
+| Bluefin | `build-iso-bluefin.yml` | `bluefin-live-latest.iso` | `projectbluefin/bluefin-nvidia:stable` |
+| Bluefin LTS HWE | `build-iso-bluefin.yml` | `bluefin-lts-hwe-live-latest.iso` | `projectbluefin/bluefin-lts-hwe-nvidia:stable` |
+
+All three are **unified NVIDIA ISOs** — the live environment boots the NVIDIA variant; the offline OCI store lets the installer deploy to non-NVIDIA hardware without a network pull (bootc auto-rebases on first upgrade).
+
+To trigger a fresh publish of all three:
+```bash
+gh workflow run build-iso.yml --ref main
+gh workflow run build-iso-bluefin.yml --ref main
+```
+
 ## Workflows
 
 | Workflow | File | Trigger |
