@@ -233,13 +233,15 @@ iso-sd-boot target:
         podman unshare buildah commit --squash "${ANNOT_CTR}" "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}"
         podman unshare buildah rm "${ANNOT_CTR}"
     else
-        # Non-composefs (bluefin, lts-hwe): preserve original layer structure.
-        # Squashing creates a single oversized blob; original layers are already
-        # compressed and copy directly into OCI layout without size explosion.
-        # Mirrors scripts/build-live-squashfs.sh non-composefs path exactly.
+        # Non-composefs (bluefin, lts-hwe): MUST squash to 1 layer before embedding.
+        # bluefin-nvidia has ~120 OCI layers; embedding without squashing writes all
+        # ~120 layer blobs into the squashfs OCI layout → ~8 GB OCI store → 12 GB ISO.
+        # Squashing to 1 layer first reduces OCI store to ~4 GB → ~6 GB final ISO.
+        # Store as OCI layout (not VFS) so fisherman can use
+        # local_imgref="oci:/var/lib/containers/oci-store".
         OCI_INJECTED="${OUTPUT_DIR}/{{target}}-payload-injected.oci"
         rm -rf "${OCI_INJECTED}"
-        podman unshare buildah commit --format oci "${INJECT_CTR}" "oci:${OCI_INJECTED}:${PAYLOAD_IMAGE}"
+        podman unshare buildah commit --squash --format oci "${INJECT_CTR}" "oci:${OCI_INJECTED}:${PAYLOAD_IMAGE}"
         podman unshare buildah rm "${INJECT_CTR}"
     fi
 

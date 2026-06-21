@@ -198,23 +198,25 @@ if [[ -n "${OCI_IMAGE}" ]]; then
         echo ">>> [live-squashfs] VFS store embedded: $(du -sh "${SFS_ROOT}/var/lib/containers/storage" | cut -f1)"
     else
         # Non-composefs (standard-ostree): store as OCI layout.
-        # Inject 00-defaults.toml (root-mount-spec) as a thin extra layer
-        # without squashing, so the original ostree layer structure is preserved.
-        echo ">>> [live-squashfs] embedding OCI image ${OCI_IMAGE} as OCI layout (non-composefs path) ..."
+        # MUST squash to 1 layer before embedding.
+        # bluefin-nvidia has ~120 OCI layers; without squashing all ~120 layer blobs
+        # land inside the squashfs OCI layout → ~8 GB OCI store → 12 GB final ISO.
+        # Squashing to 1 layer first reduces OCI store to ~4 GB → ~6 GB final ISO.
+        echo ">>> [live-squashfs] embedding OCI image ${OCI_IMAGE} as OCI layout (non-composefs path, squash to 1 layer) ..."
 
         OCI_DIR="${SFS_ROOT}/var/lib/containers/oci-store"
         mkdir -p "${OCI_DIR}"
 
-        # Inject root-mount-spec config into the image (adds one tiny layer).
+        # Inject root-mount-spec config and squash to 1 layer.
         printf '[install]\nroot-mount-spec = "LABEL=root"\n' > "${WORK}/bootc-root-mount.toml"
         INJECT_CTR="$(buildah from --pull-never "${OCI_IMAGE}")"
         buildah copy "${INJECT_CTR}" "${WORK}/bootc-root-mount.toml" /tmp/.bootc-root-mount.toml
         buildah run  "${INJECT_CTR}" -- sh -c 'mkdir -p /usr/lib/bootc/install && cp /tmp/.bootc-root-mount.toml /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
         OCI_INJECTED="${WORK}/payload-injected.oci"
-        buildah commit --format oci "${INJECT_CTR}" "oci:${OCI_INJECTED}:${OCI_IMAGE}"
+        buildah commit --squash --format oci "${INJECT_CTR}" "oci:${OCI_INJECTED}:${OCI_IMAGE}"
         buildah rm "${INJECT_CTR}"
 
-        # Copy to the squashfs root, preserving the original layer blobs.
+        # Copy to the squashfs root.
         echo ">>> [live-squashfs] copying OCI layout into squashfs root ..."
         skopeo copy "oci:${OCI_INJECTED}:${OCI_IMAGE}" "oci:${OCI_DIR}"
         rm -rf "${OCI_INJECTED}"

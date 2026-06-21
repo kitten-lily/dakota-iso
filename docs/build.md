@@ -157,8 +157,16 @@ The live environment runs the nvidia image. At install time, `bootc-installer`'s
 - **No NVIDIA GPU:** installs offline from the nvidia VFS store, `targetImgref=dakota:stable` —
   first `bootc upgrade` rebases to the correct non-nvidia variant automatically
 
-**Expected ISO size:** ~5.3 GB (with `compression=release`). If the ISO is ~8 GB, the
-offline OCI store was double-embedded — see `ci.md` lessons.
+**Expected ISO sizes:**
+
+| Variant | fast compression | release compression |
+|---|---|---|
+| `dakota` (composefs) | ~5.5 GB | ~4.5 GB |
+| `bluefin` / `bluefin-lts-hwe` (non-composefs) | ~7 GB | ~6 GB |
+
+If a bluefin ISO is **~12 GB**: the non-composefs OCI embedding is not squashing.
+See "Non-composefs OCI squash" lesson below.
+If a dakota ISO is **~8 GB**: double-embedded store — see `ci.md` lessons.
 
 ### CI uses `SUPERISO_COMPRESSION=release` (2026-06)
 
@@ -387,12 +395,15 @@ fisherman: fatal: bootc install: pulling image: podman pull oci:/var/lib/contain
 
 **Fix:** `iso-sd-boot` now reads `live/src/<target>/composefs` and branches **before** squash:
 - `composefs=true` → squash to 1 layer → VFS import via skopeo inside installer container
-- `composefs=false` → `buildah commit --format oci` (NO squash, preserves original layers) →
+- `composefs=false` → **squash to 1 layer** → `buildah commit --squash --format oci` →
   `skopeo copy oci:... oci:<oci-store-dir>`
 
-**Critical: branch before squash.** Squashing a non-composefs image (bluefin) to one layer
-then storing as OCI layout produces a single ~9 GB uncompressed blob → ~11 GB ISO.
-Original layers are already gzip-compressed and copy cleanly to OCI layout at expected size.
+**Both paths squash.** Never use `--format oci` without `--squash` for embedded OCI stores.
+bluefin-nvidia has ~120 OCI layers; without `--squash`, all layer blobs land in the squashfs
+OCI layout → ~8 GB OCI store → 12 GB ISO. With `--squash`: ~4 GB OCI store → ~6 GB ISO.
+
+**Critical: branch before squash.** The composefs flag must be read before any squash
+operation, and both paths must squash.
 
 This mirrors `scripts/build-live-squashfs.sh` exactly.
 `live/src/<target>/composefs` is the single source of truth — both scripts read it.

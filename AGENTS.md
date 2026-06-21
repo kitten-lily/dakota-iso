@@ -209,16 +209,23 @@ just --list        # verify justfile is parseable (no just check target yet)
 
 ### ISO size invariant
 
-The unified dakota ISO must be **~5.3 GB** with `SUPERISO_COMPRESSION=release`.
+| Variant | Expected size (fast) | Expected size (release) |
+|---|---|---|
+| `dakota` (composefs) | ~5.5 GB | ~4.5 GB |
+| `bluefin` / `bluefin-lts-hwe` (non-composefs) | ~7 GB | ~6 GB |
 
-- If an ISO is **~8 GB**: the offline OCI store squashfs is being double-embedded.
+- If a **bluefin/lts-hwe** ISO is **~12 GB**: the non-composefs OCI embedding is NOT
+  squashing layers before writing to `oci-store`. bluefin-nvidia has ~120 OCI layers;
+  without `--squash`, all ~120 layer blobs land in the squashfs → ~8 GB OCI store → 12 GB ISO.
+  **Fix:** `buildah commit --squash --format oci` (not `--format oci` alone) in both
+  `justfile` and `scripts/build-live-squashfs.sh` non-composefs paths.
+  **This has been rediscovered multiple times — never remove `--squash` from this path.**
+- If a **dakota** ISO is **~8 GB**: the VFS OCI store is being double-embedded.
   The live squashfs already contains the OCI baked in as VFS containers-storage.
   Do **not** build a separate `store.squashfs.img` or pass `--store` to `build-iso.sh`.
-  See [`docs/ci.md`](docs/ci.md) lessons.
-- If an ISO is **~6–7 GB**: compression is set to `fast` (zstd-3). Use `release` for R2.
 - If an ISO is **~4.4 GB** and installs fail with `does not resolve to an image ID`: the
   VFS store is missing. `scripts/build-live-squashfs.sh` must be called with
-  `--oci-image <ref>`. See [`docs/ci.md`](docs/ci.md) — issue #78.
+  `--oci-image <ref>`.
 
 ### Sensitive paths (require maintainer review)
 
