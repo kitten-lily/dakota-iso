@@ -33,7 +33,7 @@ else
 fi
 
 RECIPE_TMP=$(mktemp /tmp/luks-recipe-XXXXXX.json)
-trap "rm -f '${RECIPE_TMP}'" EXIT
+trap 'rm -f "${RECIPE_TMP}"' EXIT
 LIVE_TARGET=$(cat "${TARGET}/live_target" 2>/dev/null | tr -d '[:space:]' || echo "${TARGET}")
 BOOTLOADER_VARIANT=$(echo "$LIVE_TARGET" | sed 's/-nvidia-open$//;s/-nvidia$//')
 COMPOSEFS_BACKEND=$(cat "live/src/${BOOTLOADER_VARIANT}/composefs" 2>/dev/null | tr -d '[:space:]' || echo "true")

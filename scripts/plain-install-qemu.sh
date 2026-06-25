@@ -41,7 +41,7 @@ if [[ "${BOOTLOADER}" == "grub" ]]; then BOOTLOADER="grub2"; fi
 FILESYSTEM="btrfs"
 
 RECIPE_TMP=$(mktemp /tmp/plain-recipe-XXXXXX.json)
-trap "rm -f '${RECIPE_TMP}'" EXIT
+trap 'rm -f "${RECIPE_TMP}"' EXIT
 
 echo "Mounting scratch disk (/dev/vdb) over /var/tmp..."
 $SSH 'sudo bash -c "
@@ -70,7 +70,7 @@ else
     $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/plain-recipe.json
     echo "Uploaded recipe — building patched fisherman for bootcDirect..."
     FISHERMAN_BIN=$(mktemp /tmp/fisherman-XXXXXX)
-    trap "rm -f '${RECIPE_TMP}' '${FISHERMAN_BIN}'" EXIT
+    trap 'rm -f "${RECIPE_TMP}" "${FISHERMAN_BIN}"' EXIT
     (cd "${FISHER_REPO}" && CGO_ENABLED=0 go build -o "${FISHERMAN_BIN}" ./cmd/fisherman/)
     $SCP "${FISHERMAN_BIN}" liveuser@127.0.0.1:/tmp/fisherman
     $SSH 'chmod +x /tmp/fisherman'
@@ -87,30 +87,30 @@ else
 fi
 
 echo "Patching BLS entries to add serial console..."
-$SSH 'sudo bash -c "
+$SSH "sudo bash -c \"
     set -euo pipefail
-    BOOT_PART=\"/dev/vda1\"
+    BOOT_PART=\\\"/dev/vda1\\\"
     if ls /dev/vda3 >/dev/null 2>&1; then
-        echo \"Detected 3 partitions layout (separate boot partition for GRUB)\"
-        BOOT_PART=\"/dev/vda2\"
+        echo \\\"Detected 3 partitions layout (separate boot partition for GRUB)\\\"
+        BOOT_PART=\\\"/dev/vda2\\\"
     fi
-    TMP=\$(mktemp -d)
-    trap \"umount \$TMP 2>/dev/null || true; rmdir \$TMP\" EXIT
-    mount \"\$BOOT_PART\" \$TMP
+    TMP=\\\$(mktemp -d)
+    trap \\\"umount \\\$TMP 2>/dev/null || true; rmdir \\\$TMP\\\" EXIT
+    mount \\\"\\\$BOOT_PART\\\" \\\$TMP
     COUNT=0
-    for entry in \$TMP/loader/entries/*.conf \$TMP/EFI/loader/entries/*.conf; do
-        [[  -f \"\$entry\" ]] || continue
-        echo \"=== BLS entry before patch: \$(basename \$entry) ===\"
-        cat \"\$entry\"
-        if grep -q \"^options \" \"\$entry\" && ! grep -q \"console=tty0\" \"\$entry\"; then
-            sed -i \"s|^options .*|& console=tty0 console=ttyS0 rd.info systemd.journald.forward_to_console=yes|\" \"\$entry\"
-            COUNT=\$((COUNT+1))
+    for entry in \\\$TMP/loader/entries/*.conf \\\$TMP/EFI/loader/entries/*.conf; do
+        [[  -f \\\"\\\$entry\\\" ]] || continue
+        echo \\\"=== BLS entry before patch: \\\$(basename \\\$entry) ===\\\"
+        cat \\\"\\\$entry\\\"
+        if grep -q \\\"^options \\\" \\\"\\\$entry\\\" && ! grep -q \\\"console=tty0\\\" \\\"\\\$entry\\\"; then
+            sed -i \\\"s|^options .*|& console=tty0 console=ttyS0 rd.info systemd.journald.forward_to_console=yes|\\\" \\\"\\\$entry\\\"
+            COUNT=\\\$((COUNT+1))
         fi
-        echo \"=== BLS entry after patch ===\"
-        cat \"\$entry\"
+        echo \\\"=== BLS entry after patch ===\\\"
+        cat \\\"\\\$entry\\\"
     done
-    echo \"BLS patch: \$COUNT entries updated\"
-"'
+    echo \\\"BLS patch: \\\$COUNT entries updated\\\"
+\""
 
 echo "Install complete. Shutting down live QEMU..."
 SOCAT_PREFIX=""
