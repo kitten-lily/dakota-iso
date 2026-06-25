@@ -291,6 +291,21 @@ mksquashfs ... -wildcards -e "proc/*" -e "sys/*" -e "dev/*" ...
 
 ---
 
+## systemd ordering cycle deadlock (rechunker-group-fix) (2026-06-24)
+
+**Symptom:**
+Installed system boots, loops on waiting for device units (`dev-ttyS0.device`, `dev-zram0.device`, and `dev-disk-by-uuid-...device`), and drops to emergency mode after 90 seconds.
+
+**Root cause:**
+A circular systemd dependency (deadlock) exists on Universal Blue (LTS/stable) base images due to `rechunker-group-fix.service` running `Before=systemd-sysusers.service` without specifying `DefaultDependencies=no`. The full loop is:
+`rechunker-group-fix` -> `local-fs.target` -> `boot.mount` -> device unit -> `udevd` -> `sysusers` -> `rechunker-group-fix`.
+Depending on systemd's cycle breaking heuristics (e.g., whether `sysusers` or `tmpfiles-setup-dev` is deleted), this will either boot successfully (by luck) or deadlock (dropping to emergency shell).
+
+**The fix:**
+Write a systemd drop-in override during post-install (`scripts/fisherman-install.sh`) to set `DefaultDependencies=no` on `rechunker-group-fix.service`. This removes the default `After=local-fs.target` dependency, breaking the circular dependency loop.
+
+---
+
 ## Red Flags
 
 - Claiming "tests pass" without specifying which gate (`plain-e2e`, `luks-test-qemu`, or unit tests)

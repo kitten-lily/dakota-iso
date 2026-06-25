@@ -53,12 +53,13 @@ jobs:
 
   plain-e2e:
     needs: unit-tests
-    name: Plain Install E2E (${{ matrix.installer_channel }})
+    name: Plain E2E ${{ matrix.variant }} (${{ matrix.installer_channel }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
+        variant: [dakota, stable, lts]
         installer_channel: [dev, stable]
 
     steps:
@@ -95,6 +96,18 @@ jobs:
       - name: Configure podman storage (intelligent driver selection)
         run: bash .github/scripts/configure_podman_storage.sh
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Clone patched fisherman
+        run: |
+          git clone https://github.com/projectbluefin/fisherman.git \
+            --branch fix/overlay-driver-for-ostree-bootc-install \
+            --depth 1 \
+            /tmp/fisherman
+
       - name: Build ISO
         id: build
         env:
@@ -107,20 +120,22 @@ jobs:
           mkdir -p output
           # Pull the payload image so fisherman uses local containers-storage
           # instead of pulling ~10 GB from the network during the E2E test.
-          PAYLOAD_IMAGE=$(cat dakota/payload_ref | tr -d '[:space:]')
+          PAYLOAD_IMAGE=$(cat ${{ matrix.variant }}/payload_ref | tr -d '[:space:]')
           sudo podman pull "$PAYLOAD_IMAGE"
           sudo -E bash scripts/build-live-squashfs.sh \
-            --target dakota \
+            --target ${{ matrix.variant }} \
             --installer-channel "$INSTALLER_CHANNEL" \
             --debug 1 \
             --oci-image "$PAYLOAD_IMAGE" \
             --output-dir /var/iso-build
           sudo bash scripts/build-iso.sh \
-            --squashfs /var/iso-build/dakota-live.squashfs \
-            --boot-tar /var/iso-build/dakota-boot-files.tar \
-            --output /var/iso-build/dakota-live.iso
-          sudo cp /var/iso-build/dakota-live.iso output/
-          ISO_SIZE=$(stat -c%s output/dakota-live.iso 2>/dev/null || echo 0)
+            --squashfs /var/iso-build/${{ matrix.variant }}-live.squashfs \
+            --boot-tar /var/iso-build/${{ matrix.variant }}-boot-files.tar \
+            --output /var/iso-build/${{ matrix.variant }}-live.iso
+          sudo cp /var/iso-build/${{ matrix.variant }}-live.iso output/
+          # The E2E test runs as the unprivileged user; make the ISO user-owned.
+          sudo chown -R "$USER:$(id -gn)" output/
+          ISO_SIZE=$(stat -c%s output/${{ matrix.variant }}-live.iso 2>/dev/null || echo 0)
           echo "iso_size=$ISO_SIZE" >> "$GITHUB_OUTPUT"
           echo "duration=$((SECONDS - START))" >> "$GITHUB_OUTPUT"
           echo "Built ISO: $(numfmt --to=iec "$ISO_SIZE")"
@@ -130,16 +145,23 @@ jobs:
         timeout-minutes: 60
         env:
           INSTALLER_CHANNEL: ${{ matrix.installer_channel }}
+          FISHER_REPO: /tmp/fisherman/fisherman
         run: |
           START=$SECONDS
           # 4096 MiB: tight overlay tmpfs to expose ENOSPC-class bugs
-          sudo env PATH="$PATH" just qemu-mem=4096 installer_channel="$INSTALLER_CHANNEL" plain-test-qemu dakota
+          # Run as the unprivileged runner user (not sudo): the bootcDirect path
+          # builds the patched fisherman with `go build`, which needs Go on PATH
+          # and runs VCS stamping against the user-owned /tmp/fisherman clone — both
+          # break under sudo. QEMU/KVM access uses an internal sudo fallback in the
+          # recipe, and all guest-side install steps run via ssh with guest sudo.
+          just qemu-mem=4096 installer_channel="$INSTALLER_CHANNEL" plain-test-qemu ${{ matrix.variant }}
           echo "duration=$((SECONDS - START))" >> "$GITHUB_OUTPUT"
 
       - name: Capture serial logs and screenshot
         if: always()
         run: |
           sudo chmod a+r /tmp/dakota-plain-qemu-*.log 2>/dev/null || true
+          ls -la /tmp/dakota-plain-qemu-* /tmp/plain-screenshot-final.ppm 2>/dev/null || true
           sudo chmod a+r /tmp/plain-screenshot-final.ppm 2>/dev/null || true
           # Convert screenshot for upload
           convert /tmp/plain-screenshot-final.ppm /tmp/plain-screenshot-final.png 2>/dev/null || true
@@ -148,7 +170,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: plain-e2e-serial-logs-${{ matrix.installer_channel }}
+          name: plain-e2e-serial-logs-${{ matrix.variant }}-${{ matrix.installer_channel }}
           path: |
             /tmp/dakota-plain-qemu-live-serial.log
             /tmp/dakota-plain-qemu-installed-serial.log
@@ -160,6 +182,7 @@ jobs:
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
+          VARIANT:           ${{ matrix.variant }}
           TEST_RESULT:       ${{ steps.plain_test.outcome }}
           INSTALLER_CHANNEL: ${{ matrix.installer_channel }}
           BUILD_S:           ${{ steps.build.outputs.duration }}
@@ -167,6 +190,7 @@ jobs:
           ISO_BYTES:         ${{ steps.build.outputs.iso_size }}
         with:
           script: |
+            const variant = process.env.VARIANT || 'dakota';
             const result  = process.env.TEST_RESULT || 'unknown';
             const channel = process.env.INSTALLER_CHANNEL || 'unknown';
             const pass    = result === 'success';
@@ -175,7 +199,7 @@ jobs:
             const fmtDur  = s => s ? `${Math.floor(s/60)}m ${s%60}s` : 'N/A';
             const fmtMiB  = b => b ? `${(b/1024/1024).toFixed(0)} MiB` : 'N/A';
             const body = [
-              `## ${icon} Plain Install E2E (${channel}) — ${pass ? 'PASSED' : 'FAILED'}`,
+              `## ${icon} Plain Install E2E ${variant} (${channel}) — ${pass ? 'PASSED' : 'FAILED'}`,
               '',
               '| Step | Details |',
               '|------|---------|',
@@ -198,9 +222,10 @@ jobs:
         run: |
           RESULT="${{ steps.plain_test.outcome }}"
           CHANNEL="${{ matrix.installer_channel }}"
+          VARIANT="${{ matrix.variant }}"
           ICON=$( [ "$RESULT" = "success" ] && echo "✅" || echo "❌" )
           {
-            echo "## ${ICON} Plain Install E2E (${CHANNEL}) — ${RESULT}"
+            echo "## ${ICON} Plain Install E2E ${VARIANT} (${CHANNEL}) — ${RESULT}"
             echo ""
             echo "| Step | Value |"
             echo "|------|-------|"
@@ -215,5 +240,6 @@ jobs:
         run: |
           echo "::error::Plain install E2E failed — see serial logs above"
           echo "::error::Serial log tail:"
+          ls /tmp/dakota-plain-qemu-*.log /tmp/plain-screenshot-final.png 2>/dev/null || true
           tail -30 /tmp/dakota-plain-qemu-installed-serial.log 2>/dev/null || true
           exit 1

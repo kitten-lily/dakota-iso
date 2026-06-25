@@ -462,6 +462,43 @@ Squashing reduces the OCI store to a single ~4 GB layer → ~6 GB final ISO.
 
 **NEVER remove `--squash` from this path.** The dakota (composefs) path squashes for VFS import; the bluefin (non-composefs) path squashes before OCI layout copy. Both paths squash.
 
+### VFS additionalimagestore requires squashing to prevent storage explosion (2026-06-23)
+
+**What failed:** Building `stable` and `lts` ISO targets failed in CI with `no space left on device` (ENOSPC) during the VFS import step of `Build debug ISO`.
+
+**Why:** To support kernels without overlay-on-overlay, the non-composefs targets (`stable`, `lts`) use the `vfs` driver for their additional image store. If the payload image is NOT squashed before import, the VFS driver has to unpack and copy all ~120 layers sequentially. Because VFS lacks copy-on-write, this layer-on-layer unpacking causes an exponential disk space explosion (>100 GB), exhausting the runner's disk.
+
+**Fix:** Ensure `buildah commit --squash --format oci` is used for the payload image in BOTH the `justfile` (inline `iso-sd-boot`) and `scripts/build-live-squashfs.sh` non-composefs paths before the `skopeo copy ... containers-storage:` import step. This squashes the payload to a single layer, preventing the VFS import explosion.
+
+### Mksquashfs silently skips bind-mounted dirs on overlayfs host (2026-06-23)
+
+**Symptom:** `just iso-sd-boot` ran successfully in CI, but the resulting live ISO was missing the entire embedded VFS store/OCI layout inside `/usr/lib/containers/storage` or `/var/lib/containers/storage`.
+
+**Why:** In the `justfile`'s `iso-sd-boot` target, the intermediate storage staging directory was bind-mounted (`mount --bind`) into the squashfs root. When the runner's build directory is on `overlayfs` (as in CI), `mksquashfs` respects filesystem boundaries (stops when the device ID changes) and silently skips the bind-mounted directory.
+
+**Fix:** Avoid bind mounts when structuring filesystems inside `SQUASHFS_ROOT`. Use `cp -a` to copy the staged container storage directory directly into the squashfs root instead of bind-mounting.
+
+### Non-composefs bootcDirect QEMU E2E installs require the scratch disk (2026-06-23)
+
+**Symptom:** E2E test runs for `stable` and `lts` failed with `no space left on device` (ENOSPC) during `bootc install to-filesystem` inside the live VM.
+
+**Why:** The `justfile`'s `luks-install-qemu` and `plain-install-qemu` targets only mounted the `/dev/vdb` scratch disk over `/var/tmp` for `composefs=true` (dakota). However, `bootc install` on non-composefs targets also writes temporary layer/blob files to `/var/tmp/container_images_...` during its extraction/deployment phase. Without the scratch disk backing `/var/tmp`, `bootc` quickly exhausts the 4 GiB VM's RAM-backed overlay tmpfs.
+
+**Fix:** Move the scratch disk mounting step outside the composefs checks in `justfile`'s `luks-install-qemu` and `plain-install-qemu` targets so it is formatted and mounted over `/var/tmp` for all variants.
+
+### Architectural Decisions for OSTree (Stable/LTS) vs ComposeFS (Dakota) (2026-06-24)
+
+Our consolidation of OSTree (GRUB) and ComposeFS (systemd-boot) installer flows into a unified repository highlighted two distinct execution requirements:
+
+1. **Storage Drivers & Whiteouts**:
+   * **ComposeFS (`dakota`)** relies on a squashed, single-layer `vfs` storage driver.
+   * **OSTree (`stable`, `lts`)** requires `overlay` with `fuse-overlayfs` mapping because the host live ISO runs `dmsquash-live` overlayfs, and CentOS 10/el10 kernels lack native overlay-on-overlay support. Standard OSTree layers must **not** be squashed during image construction to preserve commits integrity. Whiteouts are stripped out during the rsync staging phase via `--no-specials --no-devices`.
+
+2. **Filesystem Selection & Boot UUID Timeout**:
+   * **`dakota` and `stable`** install successfully using raw `btrfs` partitions.
+   * **`lts`** targets formatted as direct `xfs` fail boot verification due to a `/boot` partition ext4 UUID detection timeout in the CentOS 10 initramfs dracut loop.
+   * **Fix**: LTS installations default to `xfs-in-lvm` which mounts through LVM volume activation hooks, bypassing the udev device-by-uuid wait step and ensuring reliable boot discovery.
+
 ### Debug ISO squashfs must mirror production mksquashfs flags (2026-06-21)
 
 **What failed:** `build-iso.yml` E2E step 1/4 (boot live ISO) — `dracut Warning: /sysroot has no proper rootfs layout` → `Can't mount root filesystem`. Production ISO was correct; boot failed because E2E uses the debug ISO (preferred by `plain-boot-qemu-live`).

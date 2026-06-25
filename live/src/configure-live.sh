@@ -344,26 +344,17 @@ with open("$SCRIPT_DIR/etc/bootc-installer/recipe.json") as f:
     recipe = json.load(f)
 
 # image = source for fisherman/bootc install
-# For composefs (dakota): containers-storage: ref in the VFS store
-# For non-composefs (bluefin, lts): oci: path to the OCI layout in squashfs
+# For composefs (dakota): containers-storage: ref in the VFS store, podman-based
+#   install.
+# For non-composefs (bluefin, lts): empty image triggers bootcDirect — fisherman
+#   runs bootc install --source-imgref containers-storage:<ref> natively,
+#   into the squashfs at /usr/lib/containers/storage.  Mirrors projectbluefin/iso.
 if "$COMPOSEFS" == "true":
     recipe["image"] = "containers-storage:$NVIDIA_IMGREF"
     recipe["local_imgref"] = "containers-storage:$NVIDIA_IMGREF"
 else:
-    # Non-composefs (bluefin, lts-hwe): OCI layout embedded at /var/lib/containers/oci-store.
-    # image="oci:..." tells fisherman to use the OCI layout directly.
-    # additionalImageStores tells fisherman to pass the OCI store as an
-    # containers/storage additionalimagestores entry (overlay driver, read-only).
-    # This avoids fisherman doing `podman pull oci:...` which copies the full
-    # ~9 GB image into VFS containers-storage on the live tmpfs → ENOSPC.
-    # fisherman >= v0.2.0 reads additionalImageStores from recipe.json and calls
-    # appendImageStoreArgs() which writes a storage.conf with:
-    #   driver = "overlay"
-    #   additionalimagestores = ["/var/lib/containers/oci-store"]
-    # bootc then finds the image via additionalimagestore without any copy.
-    recipe["image"] = "oci:/var/lib/containers/oci-store"
-    recipe["local_imgref"] = "oci:/var/lib/containers/oci-store"
-    recipe["additionalImageStores"] = ["/var/lib/containers/oci-store"]
+    recipe["image"] = ""
+    recipe["local_imgref"] = "containers-storage:$NVIDIA_IMGREF"
 recipe["targetImgref"] = "$BASE_IMGREF"
 recipe["imgref"] = "$BASE_IMGREF"
 # All variants default to btrfs. XFS is available as a UI option only.
@@ -506,24 +497,61 @@ EOF
 mkdir -p /usr/lib/tmpfiles.d
 echo 'f /etc/hostname 0644 - - - dakota-live' > /usr/lib/tmpfiles.d/live-hostname.conf
 
-# ── containers-storage: VFS driver ───────────────────────────────────────────
-# The OCI payload image is baked into the squashfs as VFS containers-storage
-# at /var/lib/containers/storage.  For CI builds, scripts/build-live-squashfs.sh
-# does this via --oci-image (squash → skopeo copy inside the installer container).
-# For local builds, the justfile iso-sd-boot recipe does the same.
-# Using driver="vfs" lets fisherman find the embedded image via
-# local_imgref="containers-storage:<ref>" in recipe.json for offline install.
-# (Overlay driver would fail to read VFS-format layers and create a conflicting
-# db.sql at first boot.)
+# ── containers-storage ──────────────────────────────────────────────────────
+# The OCI payload image is baked into the squashfs.
+# Strategy depends on composefs vs. bootcDirect (non-composefs):
+#
+#   composefs (dakota): VFS driver at /var/lib/containers/storage.
+#     Fisherman exports VFS → OCI at install time, podman-based install.
+#
+#   non-composefs (stable, lts): VFS driver at /var/lib/containers/storage
+#     with a VFS-format additionalimagestore at /usr/lib/containers/storage
+#     (read-only squashfs).  VFS driver is required — the live ISO rootfs is
+#     overlayfs (dmsquash-live) and el10 (LTS) lacks native overlay-on-overlay;
+#     an overlay-format additional store silently fails, causing bootc to write
+#     blobs to /var/tmp (RAM-backed tmpfs) → ENOSPC.
+#     bootcDirect runs bootc natively with containers-storage:<ref> resolving
+#     via the VFS additional store.  Mirrors projectbluefin/iso commit 34fe6659.
 
 mkdir -p /var/lib/containers/storage
 mkdir -p /etc/containers
-cat > /etc/containers/storage.conf << 'STOREOF'
+
+if [ "$COMPOSEFS" = "true" ]; then
+    # composefs: VFS driver for VFS-format layers baked into squashfs
+    cat > /etc/containers/storage.conf << 'STOREOF'
 [storage]
 driver = "vfs"
 runroot = "/run/containers/storage"
 graphroot = "/var/lib/containers/storage"
 STOREOF
+else
+    # non-composefs (bootcDirect): overlay driver with fuse-overlayfs, payload in overlay additional store.
+    # We must use fuse-overlayfs because the live ISO rootfs is overlayfs (dmsquash-live)
+    # and the el10 kernel (LTS) lacks native overlay-on-overlay support.
+    # Using fuse-overlayfs bypasses kernel restrictions and allows the overlay driver
+    # to be used, which avoids the VFS storage explosion of unsquashed images.
+    mkdir -p /usr/lib/containers/storage
+    cat > /etc/containers/storage.conf << 'STOREOF'
+[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
+
+[storage.options]
+additionalimagestores = [
+  "/usr/lib/containers/storage"
+]
+
+[storage.options.overlay]
+mount_program = "/usr/bin/fuse-overlayfs"
+STOREOF
+
+    # Bind-mount the read-only squashfs payload into container namespaces
+    # so fisherman/podman can resolve containers-storage:<ref> offline.
+    cat > /etc/containers/mounts.conf << 'MOUNTSEOF'
+/usr/lib/containers/storage:/usr/lib/containers/storage
+MOUNTSEOF
+fi
 
 # fisherman handles scratch space, transport-prefix stripping, OCI export, and
 # GPT partition retagging natively — no host-side wrappers needed.

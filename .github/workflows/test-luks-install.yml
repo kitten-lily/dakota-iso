@@ -53,12 +53,13 @@ jobs:
 
   luks-e2e:
     needs: unit-tests
-    name: LUKS E2E (${{ matrix.installer_channel }})
+    name: LUKS E2E ${{ matrix.variant }} (${{ matrix.installer_channel }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
+        variant: [dakota, stable, lts]
         installer_channel: [dev, stable]
 
     steps:
@@ -104,6 +105,18 @@ jobs:
       - name: Configure podman storage (intelligent driver selection)
         run: bash .github/scripts/configure_podman_storage.sh
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Clone patched fisherman
+        run: |
+          git clone https://github.com/projectbluefin/fisherman.git \
+            --branch fix/overlay-driver-for-ostree-bootc-install \
+            --depth 1 \
+            /tmp/fisherman
+
       - name: Build debug ISO
         id: build
         run: |
@@ -119,21 +132,28 @@ jobs:
             debug=1 \
             installer_channel=${{ matrix.installer_channel }} \
             output_dir=/var/iso-build \
-            iso-sd-boot dakota
+            iso-sd-boot ${{ matrix.variant }}
 
-          sudo cp /var/iso-build/dakota-live.iso output/dakota-live.iso
+          sudo cp /var/iso-build/${{ matrix.variant }}-live.iso output/${{ matrix.variant }}-live.iso
           sudo chown -R "$USER:$(id -gn)" output/
           echo "duration=$(( $(date +%s) - START ))" >> "$GITHUB_OUTPUT"
-          echo "iso_size=$(stat -c%s output/dakota-live.iso 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+          echo "iso_size=$(stat -c%s output/${{ matrix.variant }}-live.iso 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
 
       - name: Fix output directory ownership
         run: sudo chown -R "$USER:$(id -gn)" output/ 2>/dev/null || true
 
       - name: Run LUKS end-to-end test
         id: luks_test
+        env:
+          FISHER_REPO: /tmp/fisherman/fisherman
         run: |
           START=$(date +%s)
-          sudo "$(command -v just)" luks-test-qemu dakota
+          # Run as the unprivileged runner user (not sudo): the bootcDirect path
+          # builds the patched fisherman with `go build`, which needs Go on PATH
+          # and runs VCS stamping against the user-owned /tmp/fisherman clone — both
+          # break under sudo. QEMU/KVM access uses an internal sudo fallback in the
+          # recipe, and all guest-side install steps run via ssh with guest sudo.
+          just luks-test-qemu ${{ matrix.variant }} ${{ matrix.installer_channel }}
           echo "duration=$(( $(date +%s) - START ))" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
@@ -156,7 +176,7 @@ jobs:
             convert "$src_ppm" "$png" 2>/dev/null || return 0
             [[ -f "$png" ]] || return 0
 
-            local path_in_repo="luks-e2e/${RUN_ID}/${{ matrix.installer_channel }}/${label}.png"
+            local path_in_repo="luks-e2e/${RUN_ID}/${{ matrix.variant }}/${{ matrix.installer_channel }}/${label}.png"
             local existing_sha
             existing_sha=$(gh api "/repos/${REPO}/contents/${path_in_repo}?ref=ci-screenshots" \
               --jq '.sha' 2>/dev/null || echo "")
@@ -192,6 +212,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
+          VARIANT:           ${{ matrix.variant }}
           LIVE_URL:          ${{ steps.screenshots.outputs.live_url }}
           PLYMOUTH_URL:      ${{ steps.screenshots.outputs.plymouth_url }}
           FINAL_URL:         ${{ steps.screenshots.outputs.final_url }}
@@ -202,6 +223,7 @@ jobs:
           INSTALLER_CHANNEL: ${{ matrix.installer_channel }}
         with:
           script: |
+            const variant = process.env.VARIANT || 'dakota';
             const result  = process.env.TEST_RESULT || 'unknown';
             const channel = process.env.INSTALLER_CHANNEL || 'unknown';
             const pass    = result === 'success';
@@ -214,7 +236,7 @@ jobs:
             const img = (url, alt) => url ? `**${alt}**\n![${alt}](${url})\n` : '';
 
             const body = [
-              `## ${icon} LUKS End-to-End Test (${channel}) — ${pass ? 'PASSED' : 'FAILED'}`,
+              `## ${icon} LUKS End-to-End Test ${variant} (${channel}) — ${pass ? 'PASSED' : 'FAILED'}`,
               '',
               '| Step | Details |',
               '|------|---------|',
@@ -240,9 +262,10 @@ jobs:
         run: |
           RESULT="${{ steps.luks_test.outcome }}"
           CHANNEL="${{ matrix.installer_channel }}"
+          VARIANT="${{ matrix.variant }}"
           ICON=$( [ "$RESULT" = "success" ] && echo "✅" || echo "❌" )
           {
-            echo "## ${ICON} LUKS End-to-End Test (${CHANNEL}) — ${RESULT}"
+            echo "## ${ICON} LUKS End-to-End Test ${VARIANT} (${CHANNEL}) — ${RESULT}"
             echo ""
             echo "| Step | Value |"
             echo "|------|-------|"
@@ -260,7 +283,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: luks-e2e-serial-logs-${{ matrix.installer_channel }}
+          name: luks-e2e-serial-logs-${{ matrix.variant }}-${{ matrix.installer_channel }}
           path: |
             /tmp/dakota-qemu-live-serial.log
             /tmp/dakota-qemu-installed-serial.log

@@ -123,14 +123,14 @@ fi
 #     Fisherman exports VFS → OCI at install time and passes
 #     --source-imgref oci:... --composefs-backend to bootc.
 #
-#   standard-ostree / non-composefs (e.g. bluefin, bluefin-lts-hwe):
-#     Store as OCI layout directly — NO squash.
-#     Squashing flattens the ostree commit structure and breaks bootc's
-#     ostree-ext unencapsulation ("Expected commit object, not File").
-#     The OCI layout preserves chunkah/zstd:chunked layers so bootc
-#     can use chunk-aware streaming install with zero intermediate staging.
-#     Fisherman calls bootc install to-filesystem --source-imgref oci:...
-#     directly (no podman run, no ENOSPC).
+#   standard-ostree / non-composefs (e.g. stable, lts):
+#     Embed into VFS containers-storage at /usr/lib/containers/storage
+#     (additionalimagestore).  VFS driver is required — the live ISO rootfs
+#     is an overlayfs and el10 (LTS) lacks native overlay-on-overlay; an
+#     overlay-format additional store silently fails, sending bootc to write
+#     large blobs to /var/tmp (RAM tmpfs) → ENOSPC.  VFS is driver-agnostic.
+#     bootcDirect resolves containers-storage:<ref> via the additional store.
+#     Mirrors projectbluefin/iso commit 34fe6659.
 #
 # Detect composefs from the recipe.json baked into the live container.
 # Run python3 directly (not via sh -c) to avoid nested double-quote parsing
@@ -200,30 +200,50 @@ if [[ -n "${OCI_IMAGE}" ]]; then
         rm -rf "${CS_STAGING}"
         echo ">>> [live-squashfs] VFS store embedded: $(du -sh "${SFS_ROOT}/var/lib/containers/storage" | cut -f1)"
     else
-        # Non-composefs (standard-ostree): store as OCI layout.
-        # MUST squash to 1 layer before embedding.
-        # bluefin-nvidia has ~120 OCI layers; without squashing all ~120 layer blobs
-        # land inside the squashfs OCI layout → ~8 GB OCI store → 12 GB final ISO.
-        # Squashing to 1 layer first reduces OCI store to ~4 GB → ~6 GB final ISO.
-        echo ">>> [live-squashfs] embedding OCI image ${OCI_IMAGE} as OCI layout (non-composefs path, squash to 1 layer) ..."
+        # Non-composefs (standard-ostree / bootcDirect): embed image into overlay
+        # containers-storage at /usr/lib/containers/storage (additionalimagestore).
+        echo ">>> [live-squashfs] non-composefs (bootcDirect) — embedding OCI image ${OCI_IMAGE} into overlay store ..."
 
-        OCI_DIR="${SFS_ROOT}/var/lib/containers/oci-store"
-        mkdir -p "${OCI_DIR}"
-
-        # Inject root-mount-spec config and squash to 1 layer.
         printf '[install]\nroot-mount-spec = "LABEL=root"\n' > "${WORK}/bootc-root-mount.toml"
         INJECT_CTR="$(buildah from --pull-never "${OCI_IMAGE}")"
         buildah copy "${INJECT_CTR}" "${WORK}/bootc-root-mount.toml" /tmp/.bootc-root-mount.toml
         buildah run  "${INJECT_CTR}" -- sh -c 'mkdir -p /usr/lib/bootc/install && cp /tmp/.bootc-root-mount.toml /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
-        OCI_INJECTED="${WORK}/payload-injected.oci"
-        buildah commit --squash --format oci "${INJECT_CTR}" "oci:${OCI_INJECTED}:${OCI_IMAGE}"
+        
+        OCI_ARCHIVE="${WORK}/payload.oci.tar"
+        CS_STAGING="${WORK}/overlay-storage"
+        STORAGE_CONF="${WORK}/st.conf"
+        mkdir -p "${CS_STAGING}"
+
+        echo ">>> [live-squashfs] committing payload without squash to preserve ostree commits ..."
+        buildah commit "${INJECT_CTR}" "oci-archive:${OCI_ARCHIVE}:${OCI_IMAGE}"
         buildah rm "${INJECT_CTR}"
 
-        # Copy to the squashfs root.
-        echo ">>> [live-squashfs] copying OCI layout into squashfs root ..."
-        skopeo copy "oci:${OCI_INJECTED}:${OCI_IMAGE}" "oci:${OCI_DIR}"
-        rm -rf "${OCI_INJECTED}"
-        echo ">>> [live-squashfs] OCI store embedded: $(du -sh "${OCI_DIR}" | cut -f1)"
+        printf '[storage]\ndriver = "overlay"\nrunroot = "/tmp/cs-runroot"\ngraphroot = "/vfs-storage"\n' \
+            > "${STORAGE_CONF}"
+
+        echo ">>> [live-squashfs] importing OCI into overlay staging dir ..."
+        podman run --rm \
+            --privileged \
+            -v "${OCI_ARCHIVE}:/payload.oci.tar:ro" \
+            -v "${CS_STAGING}:/vfs-storage" \
+            -v "${STORAGE_CONF}:/tmp/st.conf:ro" \
+            "${IMAGE}" \
+            sh -c "mkdir -p /tmp/cs-runroot /var/tmp && \
+                   CONTAINERS_STORAGE_CONF=/tmp/st.conf \
+                   skopeo copy \
+                   oci-archive:/payload.oci.tar:${OCI_IMAGE} \
+                   containers-storage:${OCI_IMAGE}"
+
+        rm -f "${OCI_ARCHIVE}" "${STORAGE_CONF}"
+
+        mkdir -p "${SFS_ROOT}/usr/lib/containers/storage"
+        echo ">>> [live-squashfs] copying overlay store into squashfs root ($(du -sh "${CS_STAGING}" | cut -f1)) ..."
+        # Overlay containers-storage contains character-device whiteout files that
+        # cp -a cannot create without privileges.  Use rsync to skip them — they
+        # are write-layer artifacts not needed in the read-only additional store.
+        rsync -a --no-specials --no-devices "${CS_STAGING}/" "${SFS_ROOT}/usr/lib/containers/storage/"
+        rm -rf "${CS_STAGING}"
+        echo ">>> [live-squashfs] overlay store embedded: $(du -sh "${SFS_ROOT}/usr/lib/containers/storage" | cut -f1)"
     fi
 fi
 

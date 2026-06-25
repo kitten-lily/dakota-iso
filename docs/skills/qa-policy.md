@@ -165,6 +165,18 @@ See the size invariant table above and [docs/ci.md](../ci.md) for the double-emb
 
 **The fix:** Removed all `sudo cat`, `sudo grep`, and `sudo socat` calls on serial logs and monitor sockets. The files are always owned by whoever ran QEMU.
 
+### permission denied on root-owned monitor sockets (2026-06-23)
+
+**What happened:** On systems where the runner user does not have direct read/write access to `/dev/kvm`, QEMU is run with `sudo`. This makes the generated QEMU monitor socket files (e.g. `/tmp/dakota-qemu-live.sock`) owned by root. When the unprivileged runner user ran raw `socat`, it silently failed to connect due to permission denied. The live QEMU instance was never powered down/quit, causing subsequent stages to fail with `Failed to get "write" lock` as the QEMU process still held the disk image lock.
+
+**The fix:** Use a conditional `$SOCAT_PREFIX` that is set to `sudo` when the monitor socket file is not writable by the current user. For example:
+```bash
+SOCAT_PREFIX=""
+if ! test -w "$MONITOR" 2>/dev/null; then SOCAT_PREFIX="sudo"; fi
+echo "quit" | $SOCAT_PREFIX socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
+```
+
+
 ### xfs.ko missing from installed initramfs (2026-06-16)
 
 **What happened:** Plain install E2E formats the root partition as XFS, but `dakota-nvidia:stable` initramfs ships `btrfs.ko` and `erofs.ko` — not `xfs.ko`. Installed system always boots to emergency mode.

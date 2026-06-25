@@ -24,11 +24,20 @@ installer_channel := "stable"
 # Example: just luks-passphrase=MySecret luks-install dakota
 luks-passphrase := "testpassphrase"
 
+# Path to the projectbluefin/fisherman repo for building the patched fisherman binary
+# used in bootcDirect mode (ostree variants: stable, lts).
+# Override with: just fisher_repo=/path/to/fisherman/fisherman luks-test-qemu stable
+fisher_repo := "/tmp/fisherman/fisherman"
+
 # Squashfs compression preset:
 #   fast    (default) — zstd level 3,  128K blocks — quick local builds/CI
 #   release           — zstd level 15, 1M blocks   — ~20% smaller, ~5× slower
 # Example: just compression=release iso-sd-boot dakota
 compression := "fast"
+
+# Map target to filesystem: btrfs for all targets to avoid boot timeout on LTS.
+_filesystem_for target:
+    @echo "btrfs"
 
 # Create an XFS loopback mount at /mnt for faster VFS import.
 #
@@ -118,283 +127,13 @@ container target:
 #
 # Output: output/<target>-live.iso
 iso-sd-boot target:
-    #!/usr/bin/bash
-    set -euo pipefail
-    PAYLOAD_IMAGE=$(cat "{{target}}/payload_ref" | tr -d '[:space:]')
-
-    mkdir -p {{output_dir}}
-    OUTPUT_DIR=$(realpath "{{output_dir}}")
-    WORKDIR=$(realpath "{{workdir}}")
-
-    echo "=== Disk space before container build ==="
-    df -h "${OUTPUT_DIR}"
-
-    # Hint: XFS at /mnt dramatically speeds up VFS import for chunkified images.
-    # Skip hint if WORKDIR is already set (e.g., CI with BTRFS).
-    if ! findmnt -n -o FSTYPE -T "${WORKDIR}" 2>/dev/null | grep -qE '^(xfs|btrfs)$'; then
-        echo "Hint: $WORKDIR is not an XFS/BTRFS mount.  For faster VFS import, run:" >&2
-        echo "  sudo just mount-xfs" >&2
-        echo "  sudo just workdir=/mnt iso-sd-boot {{target}}" >&2
-    fi
-
-    # Preflight space check: warn if the output dir's filesystem looks tight.
-    # This is advisory — CI environments manage space externally (XFS loopback,
-    # secondary /mnt mounts) so hard-failing here would be wrong.
-    # We check output dir (not /) because on composefs/ostree systems df / reports 0.
-    AVAILABLE_KB=$(df --output=avail -B1024 "${OUTPUT_DIR}" | tail -1 | tr -d ' ')
-    REQUIRED_KB=$((20 * 1024 * 1024))  # 20GB minimum for ISO output
-    if [ "$AVAILABLE_KB" -lt "$REQUIRED_KB" ]; then
-        echo "WARNING: Only $(( AVAILABLE_KB / 1024 / 1024 ))GB free on $(df --output=target "${OUTPUT_DIR}" | tail -1) — ISO output needs ~5GB, full build needs more" >&2
-        echo "Hint: set output_dir= to a path with more space, or use a larger disk" >&2
-    fi
-    podman images --format "table {{{{.Repository}}}}\t{{{{.Tag}}}}\t{{{{.Size}}}}" 2>/dev/null || true
-
-    just debug={{debug}} installer_channel={{installer_channel}} container {{target}}
-
-    echo "=== Disk space after container build ==="
-    df -h "${OUTPUT_DIR}"
-    podman images --format "table {{{{.Repository}}}}\t{{{{.Tag}}}}\t{{{{.Size}}}}" 2>/dev/null || true
-
-    # Aggressively free space: remove dangling images and known disposable images.
-    # The only image we need is localhost/{{target}}-installer.
-    podman rmi debian:sid 2>/dev/null || true
-    podman image prune -f 2>/dev/null || true
-    echo "=== Disk space after intermediate cleanup ==="
-    df -h "${OUTPUT_DIR}"
-
-    # podman unshare enters the user namespace so rootless podman's sub-uid mapped
-    # files are accessible/removable.  When running as root (e.g. CI with sudo),
-    # there is no user namespace to enter — run commands directly instead.
-    if [[ $(id -u) -eq 0 ]]; then
-        _ns()    { bash -c "$1"; }
-    else
-        _ns()    { podman unshare bash -c "$1"; }
-    fi
-
-    # The OCI payload (for offline install) is built into a staging directory on
-    # /var (plenty of space) rather than inside the container's writable layer.
-    # mksquashfs merges the image rootfs + staging dir, deduplicating blocks that
-    # appear in both (most of the OCI layer data is identical to the live rootfs).
-    # -processors 4 caps memory usage — default (all CPUs) OOMs on this machine.
-    SQUASHFS="${OUTPUT_DIR}/{{target}}-rootfs.sfs"
-    BOOT_TAR="${OUTPUT_DIR}/{{target}}-boot-files.tar"
-    CS_STAGING="${WORKDIR}/{{target}}-cs-staging"
-    SQUASHFS_ROOT="${WORKDIR}/{{target}}-sfs-root"
-    # CS_STAGING and SQUASHFS_ROOT contain sub-uid owned files; must be removed inside the namespace.
-    trap "rm -f '${SQUASHFS}' '${BOOT_TAR}' '${OUTPUT_DIR}/{{target}}-payload.oci.tar' 2>/dev/null || true" EXIT
-    echo "=== Disk space before squashfs assembly ==="
-    df -h "${OUTPUT_DIR}"
-    if [[ "$WORKDIR" != "$OUTPUT_DIR" ]]; then
-        df -h "${WORKDIR}"
-    fi
-    echo "Building squashfs and boot tar from localhost/{{target}}-installer..."
-    # Write bootc install config override (root_mount_spec bypasses UUID auto-detect).
-    # LABEL=root is always valid: fisherman formats every root partition with -L root.
-    printf '[install]\nroot-mount-spec = "LABEL=root"\n' > "${OUTPUT_DIR}/.bootc-root-mount.toml"
-
-    # ── OCI archive creation (buildah) ───────────────────────────────────────
-    # Strategy depends on composefs vs. standard-ostree — must branch BEFORE squash:
-    #
-    #   composefs (dakota): squash all layers to one, import into VFS containers-storage.
-    #     Fedora images default to overlay; vfs-storage.conf forces VFS inside the
-    #     install container.  ostree.final-diffid must point to the squashed layer.
-    #
-    #   standard-ostree / non-composefs (bluefin, bluefin-lts-hwe): preserve original
-    #     layer blobs, store as OCI layout.  No squash — squashing destroys the ostree
-    #     layer structure and produces a single oversized blob.  Mirrors CI script:
-    #     scripts/build-live-squashfs.sh non-composefs path.
-    #
-    # All buildah/skopeo runs via 'podman unshare' for correct rootless UID mapping.
-    COMPOSEFS_BACKEND=$(cat "live/src/{{target}}/composefs" 2>/dev/null | tr -d '[:space:]' || echo "true")
-    echo "=== Building offline OCI store (composefs=${COMPOSEFS_BACKEND}) for ${PAYLOAD_IMAGE} ==="
-
-    PAYLOAD_OCI="${OUTPUT_DIR}/{{target}}-payload.oci.tar"
-    INJECT_CTR=$(podman unshare buildah from --pull-never "${PAYLOAD_IMAGE}")
-    podman unshare buildah copy "${INJECT_CTR}" "${OUTPUT_DIR}/.bootc-root-mount.toml" /tmp/.bootc-root-mount.toml
-    podman unshare buildah run  "${INJECT_CTR}" -- sh -c 'mkdir -p /usr/lib/bootc/install && cp /tmp/.bootc-root-mount.toml /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
-
-    if [[ "${COMPOSEFS_BACKEND}" == "true" ]]; then
-        # Write VFS storage.conf: forces VFS driver inside the install container.
-        printf '[storage]\ndriver = "vfs"\nrunroot = "/run/containers/storage"\ngraphroot = "/var/lib/containers/storage"\n' > "${OUTPUT_DIR}/.vfs-storage.conf"
-        podman unshare buildah run  "${INJECT_CTR}" -- mkdir -p /etc/containers
-        podman unshare buildah copy "${INJECT_CTR}" "${OUTPUT_DIR}/.vfs-storage.conf" /etc/containers/storage.conf
-        echo "=== Squashing ${PAYLOAD_IMAGE} to single layer (avoids VFS explosion) ==="
-        podman unshare buildah commit --squash "${INJECT_CTR}" "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}"
-        podman unshare buildah rm "${INJECT_CTR}"
-        # Update ostree.final-diffid to point to the new squashed layer's diff_id.
-        ANNOT_CTR=$(podman unshare buildah from --pull-never "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}")
-        SQUASHED_DIFFID=$(podman unshare skopeo inspect --config "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}" 2>/dev/null | \
-            python3 -c 'import json,sys; c=json.load(sys.stdin); print(c["rootfs"]["diff_ids"][0])' 2>/dev/null || true)
-        if [[ -n "${SQUASHED_DIFFID}" ]]; then
-            echo "Updating ostree.final-diffid to ${SQUASHED_DIFFID} (composefs mode)"
-            podman unshare buildah config --label "ostree.final-diffid=${SQUASHED_DIFFID}" "${ANNOT_CTR}"
-            podman unshare buildah config --annotation "ostree.final-diffid=${SQUASHED_DIFFID}" "${ANNOT_CTR}"
-        fi
-        podman unshare buildah commit --squash "${ANNOT_CTR}" "oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}"
-        podman unshare buildah rm "${ANNOT_CTR}"
-    else
-        # Non-composefs (bluefin, lts-hwe): MUST squash to 1 layer before embedding.
-        # bluefin-nvidia has ~120 OCI layers; embedding without squashing writes all
-        # ~120 layer blobs into the squashfs OCI layout → ~8 GB OCI store → 12 GB ISO.
-        # Squashing to 1 layer first reduces OCI store to ~4 GB → ~6 GB final ISO.
-        # Store as OCI layout (not VFS) so fisherman can use
-        # local_imgref="oci:/var/lib/containers/oci-store".
-        OCI_INJECTED="${OUTPUT_DIR}/{{target}}-payload-injected.oci"
-        rm -rf "${OCI_INJECTED}"
-        podman unshare buildah commit --squash --format oci "${INJECT_CTR}" "oci:${OCI_INJECTED}:${PAYLOAD_IMAGE}"
-        podman unshare buildah rm "${INJECT_CTR}"
-    fi
-
-    podman rmi "${PAYLOAD_IMAGE}" || true
-
-    _ns "
-        set -euo pipefail
-        echo '=== Disk space inside _ns block ==='
-        df -h '${OUTPUT_DIR}'
-        if [[ '$WORKDIR' != '$OUTPUT_DIR' ]]; then
-            df -h '${WORKDIR}'
-        fi
-
-        SQUASHFS_ROOT='${SQUASHFS_ROOT}'
-        CS_STAGING='${CS_STAGING}'
-        OVERLAY_UPPER=\$(mktemp -d \"\${SQUASHFS_ROOT}_upper_XXXXXX\")
-        OVERLAY_WORK=\$(mktemp -d \"\${SQUASHFS_ROOT}_work_XXXXXX\")
-
-        ns_cleanup() {
-            umount \"\${SQUASHFS_ROOT}/var/lib/containers/storage\"  2>/dev/null || true
-            umount \"\${SQUASHFS_ROOT}/var/lib/containers/oci-store\" 2>/dev/null || true
-            umount \"\${SQUASHFS_ROOT}\"                              2>/dev/null || true
-            podman image unmount localhost/{{target}}-installer       2>/dev/null || true
-            rm -rf \"\${OVERLAY_UPPER}\" \"\${OVERLAY_WORK}\"         2>/dev/null || true
-            rm -rf \"\${CS_STAGING}\" \"\${SQUASHFS_ROOT}\"           2>/dev/null || true
-        }
-        trap ns_cleanup EXIT
-
-        MOUNT=\$(podman image mount localhost/{{target}}-installer)
-        PATH=/usr/sbin:/usr/bin:/home/linuxbrew/.linuxbrew/bin:\$PATH
-
-        # Populate the offline OCI store in a staging dir.
-        # Strategy mirrors scripts/build-live-squashfs.sh:
-        #   composefs (dakota): import as VFS containers-storage → /var/lib/containers/storage
-        #   non-composefs (bluefin, lts): copy as OCI layout → /var/lib/containers/oci-store
-        PAYLOAD_OCI='${OUTPUT_DIR}/{{target}}-payload.oci.tar'
-        OCI_INJECTED='${OUTPUT_DIR}/{{target}}-payload-injected.oci'
-        COMPOSEFS='${COMPOSEFS_BACKEND}'
-
-        echo '=== Disk space before OCI store embed ==='
-        df -h '${OUTPUT_DIR}'
-        if [[ '$WORKDIR' != '$OUTPUT_DIR' ]]; then
-            df -h '${WORKDIR}'
-        fi
-
-        if [[ \"\${COMPOSEFS}\" == \"true\" ]]; then
-            # ── composefs path: VFS containers-storage ───────────────────────
-            # skopeo runs inside the installer container so tar-split metadata
-            # is written in the JSON format the live ISO can read (the build host
-            # containers/storage emits binary tar-split; installer uses JSON).
-            SQUASHFS_STORAGE=\"\${CS_STAGING}/var/lib/containers/storage\"
-            STORAGE_CONF=\"\$(mktemp '${OUTPUT_DIR}'/live-storage-XXXXXX.conf)\"
-            mkdir -p \"\${SQUASHFS_STORAGE}\"
-            printf '[storage]\ndriver = \"vfs\"\nrunroot = \"/tmp/cs-runroot\"\ngraphroot = \"/vfs-storage\"\n' \
-                > \"\${STORAGE_CONF}\"
-            echo 'Importing OCI image into squashfs VFS containers-storage...'
-            podman run --rm \
-                --privileged \
-                -v \"\${PAYLOAD_OCI}:/payload.oci.tar:ro\" \
-                -v \"\${SQUASHFS_STORAGE}:/vfs-storage\" \
-                -v \"\${STORAGE_CONF}:/tmp/st.conf:ro\" \
-                localhost/{{target}}-installer \
-                sh -c 'mkdir -p /tmp/cs-runroot /var/tmp && CONTAINERS_STORAGE_CONF=/tmp/st.conf skopeo copy oci-archive:/payload.oci.tar:'"${PAYLOAD_IMAGE}"' containers-storage:'"${PAYLOAD_IMAGE}"''
-            rm -f \"\${PAYLOAD_OCI}\" \"\${STORAGE_CONF}\"
-        else
-            # ── non-composefs path: OCI layout ────────────────────────────────
-            # configure-live.sh sets local_imgref="oci:/var/lib/containers/oci-store"
-            # for bluefin/lts-hwe. OCI_INJECTED is an oci: directory (not a tar)
-            # with original layers preserved — no squash. Mirrors CI script exactly.
-            OCI_STORE=\"\${CS_STAGING}/var/lib/containers/oci-store\"
-            mkdir -p \"\${OCI_STORE}\"
-            echo 'Copying OCI layout into squashfs OCI store (original layers preserved)...'
-            podman unshare skopeo copy \"oci:\${OCI_INJECTED}:${PAYLOAD_IMAGE}\" \"oci:\${OCI_STORE}\"
-            rm -rf \"\${OCI_INJECTED}\"
-        fi
-
-        echo '=== Disk space after OCI store embed ==='
-        df -h '${OUTPUT_DIR}'
-        if [[ '$WORKDIR' != '$OUTPUT_DIR' ]]; then
-            df -h '${WORKDIR}'
-        fi
-        du -sh \"\${CS_STAGING}\" 2>/dev/null || true
-
-        # mksquashfs adds each source directory as a named subdirectory — it does
-        # NOT union-merge multiple sources into root. To get the VFS storage at
-        # /var/lib/containers/storage/ in the squashfs (not at /dakota-cs-staging/...),
-        # we build a single unified source tree using overlayfs + bind mounts.
-        echo 'Building unified squashfs source tree using bind mounts...'
-        mkdir -p \"\${SQUASHFS_ROOT}\"
-
-        FS_TYPE=\$(findmnt -n -o FSTYPE -T \"\${SQUASHFS_ROOT}\" 2>/dev/null || echo \"unknown\")
-        if [[ \"\${FS_TYPE}\" == \"xfs\" || \"\${FS_TYPE}\" == \"ext4\" ]]; then
-            echo \"Filesystem is \${FS_TYPE}, trying overlay\"
-            if ! mount -t overlay overlay \
-                -o lowerdir=\"\${MOUNT}\",upperdir=\"\${OVERLAY_UPPER}\",workdir=\"\${OVERLAY_WORK}\" \"\${SQUASHFS_ROOT}\"; then
-                echo \"Overlay mount failed on \${FS_TYPE}; falling back to cp -a\"
-                cp -a \"\${MOUNT}/.\" \"\${SQUASHFS_ROOT}/\"
-            fi
-        else
-            echo \"Filesystem is \${FS_TYPE}, doing it the boring way\"
-            cp -a \"\${MOUNT}/.\" \"\${SQUASHFS_ROOT}/\"
-        fi
-
-        # Bind mount the OCI store into the squashfs at the correct path for this variant
-        if [[ \"\${COMPOSEFS}\" == \"true\" ]]; then
-            mkdir -p \"\${SQUASHFS_ROOT}/var/lib/containers/storage\"
-            mount --bind \"\${CS_STAGING}/var/lib/containers/storage\" \"\${SQUASHFS_ROOT}/var/lib/containers/storage\"
-        else
-            mkdir -p \"\${SQUASHFS_ROOT}/var/lib/containers/oci-store\"
-            mount --bind \"\${CS_STAGING}/var/lib/containers/oci-store\" \"\${SQUASHFS_ROOT}/var/lib/containers/oci-store\"
-        fi
-        echo '=== Disk space after creation of squashfs root ==='
-        df -h '${OUTPUT_DIR}'
-        if [[ '$WORKDIR' != '$OUTPUT_DIR' ]]; then
-            df -h '${WORKDIR}'
-        fi
-        du -sh \"\${SQUASHFS_ROOT}\" 2>/dev/null || true
-
-        # mksquashfs >= 4.7 removes directories with plain -e; use -wildcards -e "dir/*"
-        # to exclude only contents, keeping the empty dir. dmsquash-live-root requires
-        # proc/ at the squashfs root to recognise it as a live rootfs. dracut's
-        # usable_root() requires all of proc/, sys/, and dev/ to exist.
-        mkdir -p \"\${SQUASHFS_ROOT}/proc\" \"\${SQUASHFS_ROOT}/sys\" \"\${SQUASHFS_ROOT}/dev\"
-        SFS_LEVEL=3; SFS_BLOCK=131072
-        [[ '{{compression}}' == 'release' ]] && { SFS_LEVEL=15; SFS_BLOCK=1048576; }
-        mksquashfs \"\${SQUASHFS_ROOT}\" '${SQUASHFS}' \
-            -noappend -comp zstd -Xcompression-level \${SFS_LEVEL} -b \${SFS_BLOCK} \
-            -processors 4 \
-            -wildcards -e "proc/*" -e "sys/*" -e "dev/*" -e run -e tmp
-
-        # Export only boot files needed for ESP assembly
-        tar -C \"\$MOUNT\" \
-            -cf '${BOOT_TAR}' \
-            ./usr/lib/modules \
-            ./usr/lib/systemd/boot/efi
-    "
-
-    echo "=== Disk space after squashfs, before ISO assembly ==="
-    df -h "${OUTPUT_DIR}"
-    du -sh "${SQUASHFS}" "${BOOT_TAR}" 2>/dev/null || true
-
-    # Run build-iso.sh directly on the host — no container needed.
-    # All required tools (xorriso, mkfs.fat, mtools) are present.
-    # TMPDIR is redirected to OUTPUT_DIR so mktemp avoids the full /tmp tmpfs.
-    # just always runs recipes from the justfile directory, so relative path works.
-    TMPDIR="${OUTPUT_DIR}" \
-    PATH="/usr/sbin:/usr/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}" \
-        bash "live/src/build-iso.sh" \
-            --title "$(cat '{{target}}/live_title' 2>/dev/null || echo 'Dakota Live')" \
-            "${BOOT_TAR}" "${SQUASHFS}" "${OUTPUT_DIR}/{{target}}-live.iso"
-
-    echo "ISO ready: ${OUTPUT_DIR}/{{target}}-live.iso"
-
+    TARGET={{target}} \
+    OUTPUT_DIR={{output_dir}} \
+    WORKDIR={{workdir}} \
+    DEBUG={{debug}} \
+    INSTALLER_CHANNEL={{installer_channel}} \
+    COMPRESSION={{compression}} \
+    bash scripts/iso-sd-boot.sh
 iso target:
     {{image-builder}} build --bootc-ref localhost/{{target}}-installer --bootc-default-fs ext4 `just _payload_ref_flag {{target}}` bootc-generic-iso
 
@@ -573,6 +312,7 @@ boot-iso-serial target:
         /usr/share/edk2/ovmf/OVMF_CODE.fd \
         /usr/share/edk2-ovmf/x64/OVMF_CODE.fd \
         /usr/share/ovmf/OVMF.fd \
+        /home/linuxbrew/.linuxbrew/share/qemu/edk2-x86_64-code.fd \
         /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
@@ -581,7 +321,10 @@ boot-iso-serial target:
         /usr/share/OVMF/OVMF_VARS.fd \
         /usr/share/edk2/ovmf/OVMF_VARS.fd \
         /usr/share/edk2-ovmf/x64/OVMF_VARS.fd \
-              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd \
+              /var/home/james/dev/ostree-composefs-rebase/ovmf_vars.fd \
+              /var/home/james/.local/share/Trash/files/e2e-logs-3/ovmf_vars.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-i386-vars.fd; do
         [[ -f "$f" ]] && { OVMF_VARS_SRC="$f"; break; }
     done
     if [[ -z "$OVMF_CODE" ]]; then
@@ -644,6 +387,7 @@ boot-libvirt-debug target:
         /usr/share/edk2/ovmf/OVMF_CODE.fd \
         /usr/share/edk2-ovmf/x64/OVMF_CODE.fd \
         /usr/share/ovmf/OVMF.fd \
+        /home/linuxbrew/.linuxbrew/share/qemu/edk2-x86_64-code.fd \
         /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
@@ -652,7 +396,10 @@ boot-libvirt-debug target:
         /usr/share/OVMF/OVMF_VARS.fd \
         /usr/share/edk2/ovmf/OVMF_VARS.fd \
         /usr/share/edk2-ovmf/x64/OVMF_VARS.fd \
-              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd \
+              /var/home/james/dev/ostree-composefs-rebase/ovmf_vars.fd \
+              /var/home/james/.local/share/Trash/files/e2e-logs-3/ovmf_vars.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-i386-vars.fd; do
         [[ -f "$f" ]] && { OVMF_VARS="$f"; break; }
     done
     if [[ -z "$OVMF_CODE" ]]; then
@@ -787,8 +534,13 @@ luks-install target:
     # just's parser (it sees the closing ) at column 0 as a delimiter).
     RECIPE_TMP=$(mktemp /tmp/luks-recipe-XXXXXX.json)
     trap "rm -f '${RECIPE_TMP}'" EXIT
-    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "containers-storage:'"${PAYLOAD_IMAGE}"'",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-luks-test",\n  "encryption": {"type": "luks-passphrase", "passphrase": "%s"},\n  "flatpaks": []\n}\n' \
-        "${DISK}" "${PASSPHRASE}" > "${RECIPE_TMP}"
+    LIVE_TARGET=$(cat "{{target}}/live_target" 2>/dev/null | tr -d '[:space:]' || echo "{{target}}")
+    BOOTLOADER_VARIANT=$(echo "$LIVE_TARGET" | sed 's/-nvidia-open$//;s/-nvidia$//')
+    COMPOSEFS_BACKEND=$(cat "live/src/${BOOTLOADER_VARIANT}/composefs" 2>/dev/null | tr -d '[:space:]' || echo "true")
+    BOOTLOADER=$(cat "live/src/${BOOTLOADER_VARIANT}/bootloader" 2>/dev/null | tr -d '[:space:]' || echo "systemd")
+    if [[ "${BOOTLOADER}" == "grub" ]]; then BOOTLOADER="grub2"; fi
+    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "containers-storage:'"${PAYLOAD_IMAGE}"'",\n  "composeFsBackend": %s,\n  "bootloader": "%s",\n  "hostname": "dakota-luks-test",\n  "encryption": {"type": "luks-passphrase", "passphrase": "%s"},\n  "flatpaks": []\n}\n' \
+        "${DISK}" "$([ "${COMPOSEFS_BACKEND}" == "true" ] && echo "true" || echo "false")" "${BOOTLOADER}" "${PASSPHRASE}" > "${RECIPE_TMP}"
     $SCP "${RECIPE_TMP}" liveuser@"$GUEST_IP":/tmp/luks-recipe.json
     echo "Uploaded recipe to /tmp/luks-recipe.json"
 
@@ -892,6 +644,7 @@ qemu-mem := "8192"
 qemu-smp := "8"
 
 # QEMU install disk path (override with: just luks-qemu-disk=/path/to/disk.qcow2 ...)
+# Default includes the target variant so parallel CI jobs don't contend.
 luks-qemu-disk := "/var/tmp/dakota-luks-install.qcow2"
 # Scratch disk for /var/tmp inside the live LUKS VM — prevents ENOSPC during
 # OCI blob extraction.  fisherman bind-mounts /var/tmp for plain targets but
@@ -931,19 +684,21 @@ e2e target:
     echo "=== Step 1/2: Building ISO (debug={{debug}}, installer_channel={{installer_channel}}) ==="
     just debug={{debug}} installer_channel={{installer_channel}} output_dir={{output_dir}} iso-sd-boot {{target}}
     echo "=== Step 2/2: LUKS end-to-end test ==="
-    rm -f "{{luks-qemu-disk}}" "{{luks-scratch-disk}}" \
+    rm -f /var/tmp/dakota-luks-install-*.qcow2 /var/tmp/dakota-luks-scratch-*.img \
                "{{luks-qemu-monitor-live}}" "{{luks-qemu-monitor-installed}}" \
                "{{luks-qemu-serial-live}}" "{{luks-qemu-serial-installed}}"
     just luks-test-qemu {{target}}
 
 # Run the full LUKS end-to-end test in QEMU (CI entry point).
 # Builds nothing — expects the ISO to already exist in {{output_dir}}.
-luks-test-qemu target:
+luks-test-qemu target installer_channel="dev":
     #!/usr/bin/bash
     set -euo pipefail
-    just luks-qemu-disk={{luks-qemu-disk}} luks-boot-qemu-live {{target}}
+    DISK="/var/tmp/dakota-luks-install-{{target}}-{{installer_channel}}.qcow2"
+    SCRATCH="/var/tmp/dakota-luks-scratch-{{target}}-{{installer_channel}}.img"
+    just luks-qemu-disk="$DISK" luks-scratch-disk="$SCRATCH" luks-boot-qemu-live {{target}}
     just luks-qemu-ssh-port={{luks-qemu-ssh-port}} luks-install-qemu {{target}}
-    just luks-qemu-disk={{luks-qemu-disk}} luks-boot-qemu-installed {{target}}
+    just luks-qemu-disk="$DISK" luks-scratch-disk="$SCRATCH" luks-boot-qemu-installed {{target}}
     just luks-qemu-monitor-installed={{luks-qemu-monitor-installed}} \
          luks-qemu-serial-installed={{luks-qemu-serial-installed}} \
          luks-unlock-qemu {{target}}
@@ -970,12 +725,16 @@ luks-boot-qemu-live target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-x86_64-code.fd \
               /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
               /usr/share/edk2/ovmf/OVMF_VARS.fd \
-              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd \
+              /var/home/james/dev/ostree-composefs-rebase/ovmf_vars.fd \
+              /var/home/james/.local/share/Trash/files/e2e-logs-3/ovmf_vars.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-i386-vars.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-qemu-live-vars.fd; OVMF_VARS=/var/tmp/dakota-qemu-live-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
@@ -1051,67 +810,7 @@ luks-boot-qemu-live target:
 # Run fisherman LUKS install via SSH into the live QEMU VM.
 # Reuses the same SSH logic as luks-install; install disk is /dev/vda in QEMU.
 luks-install-qemu target:
-    #!/usr/bin/bash
-    set -euo pipefail
-    PASSPHRASE="{{luks-passphrase}}"
-    DISK="/dev/vda"
-    PAYLOAD_IMAGE=$(cat "{{target}}/payload_ref" | tr -d '[:space:]')
-    SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o PreferredAuthentications=password -o ServerAliveInterval=30 -o ServerAliveCountMax=20"
-    SSH="sshpass -p live ssh $SSH_OPTS liveuser@127.0.0.1 -p {{luks-qemu-ssh-port}}"
-    SCP="sshpass -p live scp $SSH_OPTS -P {{luks-qemu-ssh-port}}"
-
-    # Use local containers-storage if the image is cached there (offline install);
-    # otherwise fall back to a network pull via docker://.
-    if $SSH "sudo podman image exists '${PAYLOAD_IMAGE}' 2>/dev/null"; then
-        INSTALL_IMAGE="containers-storage:${PAYLOAD_IMAGE}"
-        echo "Image found in local containers-storage — using offline install."
-    else
-        INSTALL_IMAGE="docker://${PAYLOAD_IMAGE}"
-        echo "Image not in local store — fisherman will pull from network."
-    fi
-
-    RECIPE_TMP=$(mktemp /tmp/luks-recipe-XXXXXX.json)
-    trap "rm -f '${RECIPE_TMP}'" EXIT
-    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "%s",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-luks-test",\n  "encryption": {"type": "luks-passphrase", "passphrase": "%s"},\n  "flatpaks": []\n}\n' \
-        "${DISK}" "${INSTALL_IMAGE}" "${PASSPHRASE}" > "${RECIPE_TMP}"
-    $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/luks-recipe.json
-    # Mount scratch disk over /var/tmp before fisherman runs.
-    # fisherman bind-mounts /var/tmp → target scratch for plain installs but not
-    # LUKS targets, leaving /var/tmp as a small RAM tmpfs (~3.2 GiB at 4 GiB RAM).
-    # The VFS blob extraction writes ~9 GB to /var/tmp and hits ENOSPC.
-    # /dev/vdb is the 16G scratch disk passed by luks-boot-qemu-live.
-    echo "Mounting scratch disk (/dev/vdb) over /var/tmp..."
-    $SSH 'sudo bash -c "
-        mkfs.ext4 -F /dev/vdb >/dev/null
-        umount /var/tmp 2>/dev/null || true
-        mount /dev/vdb /var/tmp
-        echo \"/var/tmp is now disk-backed on /dev/vdb\"
-    "'
-    echo "Uploaded recipe — running fisherman (takes several minutes)..."
-    # Use wrapper to patch the composefs hostname-write bug (same as plain install).
-    $SCP "scripts/fisherman-install.sh" liveuser@127.0.0.1:/tmp/fisherman-install.sh
-    $SSH 'sudo bash /tmp/fisherman-install.sh /tmp/luks-recipe.json'
-    echo "Patching BLS entries to enable dual serial+VT console..."
-    $SSH 'sudo bash -c "
-        set -euo pipefail
-        TMP=$(mktemp -d)
-        trap \"umount \$TMP 2>/dev/null || true; rmdir \$TMP\" EXIT
-        mount /dev/vda1 \$TMP
-        COUNT=0
-        for entry in \$TMP/loader/entries/*.conf \$TMP/EFI/loader/entries/*.conf; do
-            [[ -f \"\$entry\" ]] || continue
-            if grep -q \"^options \" \"\$entry\" && ! grep -q \"console=tty0\" \"\$entry\"; then
-                sed -i \"s|^options .*|& console=tty0 console=ttyS0|\" \"\$entry\"
-                COUNT=\$((COUNT+1))
-                echo \"  patched: \$(basename \$entry)\"
-            fi
-        done
-        echo \"BLS patch: \$COUNT entries updated\"
-    "'
-    echo "Install complete. Shutting down live QEMU..."
-    echo "system_powerdown" | socat - "UNIX-CONNECT:{{luks-qemu-monitor-live}}" 2>/dev/null || true
-    sleep 5
-    echo "quit" | socat - "UNIX-CONNECT:{{luks-qemu-monitor-live}}" 2>/dev/null || true
+    ./scripts/luks-install-qemu.sh "{{target}}" "{{luks-passphrase}}" "{{luks-qemu-ssh-port}}" "{{luks-qemu-monitor-live}}" "{{fisher_repo}}"
 
 # Boot the installed disk in QEMU (no ISO). Called after luks-install-qemu.
 luks-boot-qemu-installed target:
@@ -1124,12 +823,16 @@ luks-boot-qemu-installed target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-x86_64-code.fd \
               /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
               /usr/share/edk2/ovmf/OVMF_VARS.fd \
-              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd \
+              /var/home/james/dev/ostree-composefs-rebase/ovmf_vars.fd \
+              /var/home/james/.local/share/Trash/files/e2e-logs-3/ovmf_vars.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-i386-vars.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-qemu-installed-vars.fd; OVMF_VARS=/var/tmp/dakota-qemu-installed-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
@@ -1137,6 +840,17 @@ luks-boot-qemu-installed target:
     rm -f "{{luks-qemu-monitor-installed}}" "{{luks-qemu-serial-installed}}"
 
     echo "Booting installed disk: {{luks-qemu-disk}}"
+    # The install recipe sends system_powerdown + quit via QEMU monitor
+    # but the daemonized QEMU may hold the qcow2 file lock briefly.
+    # Wait for the QEMU process matching THIS variant's disk to exit.
+    DISK_PATTERN="$(echo '{{luks-qemu-disk}}' | sed 's/\./\\./g')"
+    for i in {1..15}; do
+        if ! sudo pgrep -f "qemu-system.*${DISK_PATTERN}" >/dev/null 2>&1; then
+            break
+        fi
+        echo "Waiting for live QEMU to exit (attempt $i)..."
+        sleep 2
+    done
     # KVM access: try direct, then sudo, then fall back to TCG
     QEMU_ACCEL="-accel kvm"
     QEMU_PREFIX=""
@@ -1248,8 +962,13 @@ plain-enospc-gate target:
     fi
     RECIPE_TMP=$(mktemp /tmp/plain-enospc-recipe-XXXXXX.json)
     trap "rm -f '${RECIPE_TMP}'" EXIT
-    printf '{\n  "disk": "/dev/vda",\n  "filesystem": "btrfs",\n  "image": "%s",\n  "composeFsBackend": true,\n  "bootloader": "systemd",\n  "hostname": "dakota-enospc-test",\n  "encryption": {"type": "none"},\n  "flatpaks": []\n}\n' \
-        "${INSTALL_IMAGE}" > "${RECIPE_TMP}"
+    LIVE_TARGET=$(cat "{{target}}/live_target" 2>/dev/null | tr -d '[:space:]' || echo "{{target}}")
+    BOOTLOADER_VARIANT=$(echo "$LIVE_TARGET" | sed 's/-nvidia-open$//;s/-nvidia$//')
+    COMPOSEFS_BACKEND=$(cat "live/src/${BOOTLOADER_VARIANT}/composefs" 2>/dev/null | tr -d '[:space:]' || echo "true")
+    BOOTLOADER=$(cat "live/src/${BOOTLOADER_VARIANT}/bootloader" 2>/dev/null | tr -d '[:space:]' || echo "systemd")
+    if [[ "${BOOTLOADER}" == "grub" ]]; then BOOTLOADER="grub2"; fi
+    printf '{\n  "disk": "/dev/vda",\n  "filesystem": "btrfs",\n  "image": "%s",\n  "composeFsBackend": %s,\n  "bootloader": "%s",\n  "hostname": "dakota-enospc-test",\n  "encryption": {"type": "none"},\n  "flatpaks": []\n}\n' \
+        "${INSTALL_IMAGE}" "$([ "${COMPOSEFS_BACKEND}" == "true" ] && echo "true" || echo "false")" "${BOOTLOADER}" > "${RECIPE_TMP}"
     $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/enospc-recipe.json
     echo "Running fisherman (watching for OCI export completion)..."
     # Run fisherman via process substitution (not a pipe) so that exit 0/1
@@ -1312,12 +1031,16 @@ plain-boot-qemu-live target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-x86_64-code.fd \
               /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
               /usr/share/edk2/ovmf/OVMF_VARS.fd \
-              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd \
+              /var/home/james/dev/ostree-composefs-rebase/ovmf_vars.fd \
+              /var/home/james/.local/share/Trash/files/e2e-logs-3/ovmf_vars.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-i386-vars.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-plain-qemu-live-vars.fd; OVMF_VARS=/var/tmp/dakota-plain-qemu-live-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
@@ -1390,74 +1113,7 @@ plain-boot-qemu-live target:
 
 # Run fisherman plain (no-encryption) composefs install via SSH.
 plain-install-qemu target:
-    #!/usr/bin/bash
-    set -euo pipefail
-    DISK="/dev/vda"
-    PAYLOAD_IMAGE=$(cat "{{target}}/payload_ref" | tr -d '[:space:]')
-    SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o PreferredAuthentications=password -o ServerAliveInterval=30 -o ServerAliveCountMax=20"
-    SSH="sshpass -p live ssh $SSH_OPTS liveuser@127.0.0.1 -p {{plain-qemu-ssh-port}}"
-    SCP="sshpass -p live scp $SSH_OPTS -P {{plain-qemu-ssh-port}}"
-    if $SSH "sudo podman image exists '${PAYLOAD_IMAGE}' 2>/dev/null"; then
-        INSTALL_IMAGE="containers-storage:${PAYLOAD_IMAGE}"
-        echo "Image found in local containers-storage — using offline install."
-    else
-        INSTALL_IMAGE="docker://${PAYLOAD_IMAGE}"
-        echo "Image not in local store — fisherman will pull from network."
-    fi
-    RECIPE_TMP=$(mktemp /tmp/plain-recipe-XXXXXX.json)
-    trap "rm -f '${RECIPE_TMP}'" EXIT
-    # Read variant-specific installer config (defaults: composefs=true, bootloader=systemd)
-    COMPOSEFS_VAL=$(cat "live/src/{{target}}/composefs" 2>/dev/null | tr -d '[:space:]' || echo "true")
-    BOOTLOADER_VAL=$(cat "live/src/{{target}}/bootloader" 2>/dev/null | tr -d '[:space:]' || echo "systemd")
-    [[ "$BOOTLOADER_VAL" == "grub" ]] && BOOTLOADER_VAL="grub2"
-    [[ "$COMPOSEFS_VAL" == "true" ]] && COMPOSEFS_JSON="true" || COMPOSEFS_JSON="false"
-    printf '{\n  "disk": "%s",\n  "filesystem": "btrfs",\n  "image": "%s",\n  "composeFsBackend": %s,\n  "bootloader": "%s",\n  "hostname": "dakota-plain-test",\n  "encryption": {"type": "none"},\n  "flatpaks": []\n}\n' \
-        "${DISK}" "${INSTALL_IMAGE}" "${COMPOSEFS_JSON}" "${BOOTLOADER_VAL}" > "${RECIPE_TMP}"
-    $SCP "${RECIPE_TMP}" liveuser@127.0.0.1:/tmp/plain-recipe.json
-    # Mount scratch disk over /var/tmp before fisherman runs.
-    # When the VFS OCI store is embedded in the ISO, fisherman reads from
-    # containers-storage and writes blobs to /var/tmp, filling the live tmpfs
-    # (~3.2 GiB at 4 GiB RAM) before the ~9 GB blob copy completes.
-    # /dev/vdb is the 16G scratch disk passed by plain-boot-qemu-live.
-    echo "Mounting scratch disk (/dev/vdb) over /var/tmp..."
-    $SSH 'sudo bash -c "
-        mkfs.ext4 -F /dev/vdb >/dev/null
-        umount /var/tmp 2>/dev/null || true
-        mount /dev/vdb /var/tmp
-        echo \"/var/tmp is now disk-backed on /dev/vdb\"
-    "'
-    echo "Uploaded recipe — running fisherman (this takes several minutes)..."
-    # Use the wrapper script that patches the composefs hostname-write bug:
-    # fisherman calls ostree admin --print-current-dir (live sysroot, not target)
-    # after unmounting, which fails on composefs/bootc deployments.
-    # scripts/fisherman-install.sh detects hostname-only failures and patches directly.
-    $SCP "scripts/fisherman-install.sh" liveuser@127.0.0.1:/tmp/fisherman-install.sh
-    $SSH 'sudo bash /tmp/fisherman-install.sh /tmp/plain-recipe.json'
-    echo "Patching BLS entries to add serial console..."
-    $SSH 'sudo bash -c "
-        set -euo pipefail
-        TMP=\$(mktemp -d)
-        trap \"umount \$TMP 2>/dev/null || true; rmdir \$TMP\" EXIT
-        mount /dev/vda1 \$TMP
-        COUNT=0
-        for entry in \$TMP/loader/entries/*.conf \$TMP/EFI/loader/entries/*.conf; do
-            [[  -f \"\$entry\" ]] || continue
-            echo \"=== BLS entry before patch: \$(basename \$entry) ===\"
-            cat \"\$entry\"
-            if grep -q \"^options \" \"\$entry\" && ! grep -q \"console=tty0\" \"\$entry\"; then
-                # Also add rd.info so bootc-root-setup output is visible on serial
-                sed -i \"s|^options .*|& console=tty0 console=ttyS0 rd.info systemd.journald.forward_to_console=yes|\" \"\$entry\"
-                COUNT=\$((COUNT+1))
-            fi
-            echo \"=== BLS entry after patch ===\"
-            cat \"\$entry\"
-        done
-        echo \"BLS patch: \$COUNT entries updated\"
-    "'
-    echo "Install complete. Shutting down live QEMU..."
-    echo "system_powerdown" | socat - "UNIX-CONNECT:{{plain-qemu-monitor-live}}" 2>/dev/null || true
-    sleep 5
-    echo "quit" | socat - "UNIX-CONNECT:{{plain-qemu-monitor-live}}" 2>/dev/null || true
+    ./scripts/plain-install-qemu.sh "{{target}}" "{{plain-qemu-ssh-port}}" "{{plain-qemu-monitor-live}}" "{{fisher_repo}}"
 
 # Boot the installed disk (no ISO) after plain-install-qemu.
 plain-boot-qemu-installed target:
@@ -1470,12 +1126,16 @@ plain-boot-qemu-installed target:
     OVMF_CODE=""; OVMF_VARS=""
     for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
               /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-x86_64-code.fd \
               /home/linuxbrew/.linuxbrew/Cellar/qemu/11.0.1/share/qemu/edk2-x86_64-code.fd; do
         [[ -f "$f" ]] && { OVMF_CODE="$f"; break; }
     done
     for f in /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
               /usr/share/edk2/ovmf/OVMF_VARS.fd \
-              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd; do
+              /var/home/jorge/VMs/bluefin-test/OVMF_VARS.fd \
+              /var/home/james/dev/ostree-composefs-rebase/ovmf_vars.fd \
+              /var/home/james/.local/share/Trash/files/e2e-logs-3/ovmf_vars.fd \
+              /home/linuxbrew/.linuxbrew/share/qemu/edk2-i386-vars.fd; do
         if [[ -f "$f" ]]; then cp "$f" /var/tmp/dakota-plain-qemu-installed-vars.fd; OVMF_VARS=/var/tmp/dakota-plain-qemu-installed-vars.fd; break; fi
     done
     [[ -z "$OVMF_CODE" ]] && { echo "OVMF firmware not found" >&2; exit 1; }
@@ -1531,9 +1191,11 @@ plain-verify-qemu target:
         LOG=$(cat "$SERIAL" 2>/dev/null || true)
         if echo "$LOG" | grep -q "Reached target.*Graphical\|Reached target.*Multi-User\|login:"; then
             echo "✅ Installed system boot verified — plain composefs install succeeded"
-            echo "screendump $SCREENSHOT" | socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
+            SOCAT_PREFIX=""
+            if ! test -w "$MONITOR" 2>/dev/null; then SOCAT_PREFIX="sudo"; fi
+            echo "screendump $SCREENSHOT" | $SOCAT_PREFIX socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
             bash "dakota/src/show-screenshot.sh" "$SCREENSHOT" "Installed system" 2>/dev/null || true
-            echo "quit" | socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
+            echo "quit" | $SOCAT_PREFIX socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
             exit 0
         fi
         # Detect emergency shell / kernel panic — fast-fail
@@ -1548,5 +1210,7 @@ plain-verify-qemu target:
     echo "❌ Timeout: installed system did not reach graphical target in 5 minutes" >&2
     echo "--- last 30 lines of serial log ---" >&2
     cat "$SERIAL" 2>/dev/null | tail -30 >&2
-    echo "screendump $SCREENSHOT" | socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
+    SOCAT_PREFIX=""
+    if ! test -w "$MONITOR" 2>/dev/null; then SOCAT_PREFIX="sudo"; fi
+    echo "screendump $SCREENSHOT" | $SOCAT_PREFIX socat - "UNIX-CONNECT:$MONITOR" 2>/dev/null || true
     exit 1

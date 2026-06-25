@@ -41,6 +41,7 @@ TEST_LUKS_WORKFLOW = REPO / ".github" / "workflows" / "test-luks-install.yml"
 TEST_PLAIN_WORKFLOW = REPO / ".github" / "workflows" / "test-plain-install.yml"
 LIVE_LUKS_UNLOCK = REPO / "live" / "src" / "luks-unlock.py"
 DAKOTA_LUKS_UNLOCK = REPO / "dakota" / "src" / "luks-unlock.py"
+BUILD_LIVE_SQUASHFS = REPO / "scripts" / "build-live-squashfs.sh"
 
 # Variant directories that must be fully configured.
 KNOWN_VARIANTS = ["dakota", "bluefin", "bluefin-lts-hwe"]
@@ -650,3 +651,80 @@ class TestBuildIsoScript(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBuildLiveSquashfs(unittest.TestCase):
+    """Invariants for scripts/build-live-squashfs.sh."""
+
+    def test_composefs_detection_no_broken_python_quoting(self):
+        """build-live-squashfs.sh must NOT use Python open() inside sh -c for composeFsBackend.
+
+        The broken pattern is:
+          sh -c 'python3 -c "... open("/etc/bootc-installer/recipe.json") ..."'
+        The '/' path separators and inner '"' break the sh quoting, causing the
+        Python -c argument to be truncated.  The result is that the detection
+        silently fails and COMPOSEFS_BACKEND is always set to false — which
+        makes the compositor embed the payload into the overlay store instead of
+        the VFS store, so 'podman image exists' returns false in the live VM
+        and fisherman falls back to a network pull (ENOSPC with 4 GiB RAM).
+
+        Use grep or cat+python (piped, no path quoting) instead.
+        """
+        content = BUILD_LIVE_SQUASHFS.read_text()
+        self.assertNotIn(
+            'open("/etc/bootc-installer/recipe.json")',
+            content,
+            "build-live-squashfs.sh contains broken Python quoting for "
+            "composeFsBackend detection: open() path inside sh -c single-quotes "
+            "breaks the -c argument. Use grep or pipe to python instead.",
+        )
+
+    def test_lts_images_json_defaults_to_btrfs(self):
+        """live/src/bluefin-lts-hwe/images.json must default to btrfs.
+
+        LTS (bluefin-lts-hwe) uses btrfs as its default filesystem to avoid boot timeouts.
+        """
+        import json
+        images_json = REPO / "live" / "src" / "bluefin-lts-hwe" / "images.json"
+        self.assertTrue(images_json.exists(), f"{images_json} not found")
+        data = json.loads(images_json.read_text())
+        for img in data.get("images", []):
+            self.assertEqual(
+                img.get("filesystem"),
+                "btrfs",
+                f"bluefin-lts-hwe/images.json image '{img.get('name')}' must "
+                "default to filesystem=btrfs. "
+                f"Got: {img.get('filesystem')!r}",
+            )
+
+    def test_justfile_lts_filesystem_is_btrfs(self):
+        """justfile _filesystem_for must return btrfs for all targets."""
+        justfile = REPO / "justfile"
+        content = justfile.read_text()
+        self.assertIn(
+            '_filesystem_for target:\n    @echo "btrfs"',
+            content,
+            "justfile _filesystem_for must return btrfs for all targets",
+        )
+
+    def test_justfile_socat_uses_prefix(self):
+        """All socat UNIX-CONNECT calls in justfile must use $SOCAT_PREFIX.
+
+        When QEMU is run with sudo for KVM access, the UNIX sockets are owned by
+        root and cannot be accessed by the unprivileged user. Using $SOCAT_PREFIX
+        (conditionally set to 'sudo' if the socket is not writable) prevents
+        silent connection/powerdown/screendump failures.
+        """
+        justfile = REPO / "justfile"
+        content = justfile.read_text()
+        # Find all lines containing socat and UNIX-CONNECT
+        for line in content.splitlines():
+            if "socat" in line and "UNIX-CONNECT:" in line:
+                self.assertIn(
+                    "$SOCAT_PREFIX socat",
+                    line,
+                    f"Line in justfile uses raw 'socat' with UNIX-CONNECT: {line!r}. "
+                    "Must use '$SOCAT_PREFIX socat' to support root-owned sockets "
+                    "when QEMU runs with sudo."
+                )
+
