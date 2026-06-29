@@ -105,10 +105,16 @@ podman rmi "${PAYLOAD_IMAGE}" || true
 export PAYLOAD_IMAGE PAYLOAD_INPUT PAYLOAD_OCI OUTPUT_DIR COMPOSEFS_BACKEND
 if [[ -n "${ISO_TOOLS_IMAGE:-}" ]]; then
     echo "Running payload prep in iso-tools container: ${ISO_TOOLS_IMAGE}"
+    # STORAGE_DRIVER=vfs: buildah's internal storage lives on the container's
+    # overlayfs rootfs. Its default overlay driver cannot stack on overlayfs
+    # without fuse-overlayfs ("'overlay' is not supported over overlayfs"); vfs
+    # has no such constraint. Scoped to the container path — the host path uses
+    # whatever the host buildah is configured for (overlay on rootful CI).
     podman run --rm --privileged --net=host \
         -v "${OUTPUT_DIR}:${OUTPUT_DIR}" \
         -v "${REPO_ROOT}/live/iso-tools/payload-prep.sh:/payload-prep.sh:ro" \
         -e PAYLOAD_IMAGE -e PAYLOAD_INPUT -e PAYLOAD_OCI -e OUTPUT_DIR -e COMPOSEFS_BACKEND \
+        -e STORAGE_DRIVER=vfs \
         "${ISO_TOOLS_IMAGE}" bash /payload-prep.sh
 else
     _ns "bash '${REPO_ROOT}/live/iso-tools/payload-prep.sh'"
