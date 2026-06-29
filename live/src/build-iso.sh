@@ -47,17 +47,19 @@ set -euo pipefail
 
 STORE_SFS=""
 ARCH_SPECS=()
+LABEL=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --store) STORE_SFS="${2:?--store requires a path}"; shift 2 ;;
         --arch)  ARCH_SPECS+=("${2:?--arch requires arch:boot-tar:squashfs}"); shift 2 ;;
         --title) LIVE_TITLE="${2:?--title requires a string}"; shift 2 ;;
+        --label) LABEL="${2:?--label requires a string}"; shift 2 ;;
         *)       break ;;
     esac
 done
 
 LIVE_TITLE="${LIVE_TITLE:-Dakota Live}"
-LABEL="DAKOTA_LIVE"
+LABEL="${LABEL:-DAKOTA_LIVE}"
 MULTI_ARCH=false
 
 if [[ ${#ARCH_SPECS[@]} -gt 0 ]]; then
