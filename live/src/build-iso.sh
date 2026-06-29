@@ -190,7 +190,7 @@ if [[ "${MULTI_ARCH}" == "true" ]]; then
 title   ${LIVE_TITLE} (${arch})
 linux   /images/pxeboot/${arch}/vmlinuz
 initrd  /images/pxeboot/${arch}/initrd.img
-options root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8
+options root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8 console=tty0 rd.shell rd.info loglevel=7
 EOF
 
         # Per-arch squashfs
@@ -224,7 +224,7 @@ EOF
             local_console="${SERIAL_CONSOLE[${arch}]:-ttyS0}"
             cat << EOF
 menuentry "${LIVE_TITLE} (${arch})" {
-    linux /images/pxeboot/${arch}/vmlinuz root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8 rd.dakota.isofile=\${iso_path}
+    linux /images/pxeboot/${arch}/vmlinuz root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8 console=tty0 rd.shell rd.info loglevel=7 rd.dakota.isofile=\${iso_path}
     initrd /images/pxeboot/${arch}/initrd.img
 }
 EOF
@@ -293,7 +293,7 @@ EOF
 title   ${LIVE_TITLE}
 linux   /images/pxeboot/vmlinuz
 initrd  /images/pxeboot/initrd.img
-options root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8
+options root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8 console=tty0 rd.shell rd.info loglevel=7
 EOF
 
     # EFI fallback path on the ISO9660 root
@@ -307,7 +307,7 @@ EOF
     cp "${INITRD}"  "${ISO_ROOT}/images/pxeboot/initrd.img"
     cat > "${ISO_ROOT}/boot/grub/loopback.cfg" << EOF
 menuentry "${LIVE_TITLE}" {
-    linux /images/pxeboot/vmlinuz root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8 rd.dakota.isofile=\${iso_path}
+    linux /images/pxeboot/vmlinuz root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8 console=tty0 rd.shell rd.info loglevel=7 rd.dakota.isofile=\${iso_path}
     initrd /images/pxeboot/initrd.img
 }
 EOF
