@@ -62,6 +62,14 @@ LIVE_TITLE="${LIVE_TITLE:-Dakota Live}"
 LABEL="${LABEL:-DAKOTA_LIVE}"
 MULTI_ARCH=false
 
+# xorriso and implantisomd5 have no freedesktop-sdk component, so on immutable
+# hosts (e.g. Krytis) they are routed through the iso-tools container. Override
+# with a `podman run ... xorriso` command via the XORRISO env var; defaults to
+# the host binary for dakota/bluefin CI. The rest of the ESP toolchain (mtools,
+# dosfstools, truncate, tar) runs on the host either way.
+XORRISO="${XORRISO:-xorriso}"
+IMPLANTISOMD5="${IMPLANTISOMD5:-implantisomd5}"
+
 if [[ ${#ARCH_SPECS[@]} -gt 0 ]]; then
     # Multi-arch mode: remaining arg is output ISO
     MULTI_ARCH=true
@@ -379,7 +387,8 @@ echo ">>> Assembling ISO..."
 #   Old UEFI firmware sees a "dos" disk, skips GPT, finds no EFI entries in the
 #   MBR partition table, and does not show the USB in the boot menu.
 #   (See issues #15, https://github.com/projectbluefin/dakota-iso/issues/15)
-xorriso -as mkisofs \
+# shellcheck disable=SC2086  # XORRISO may be a multi-word `podman run ...` command
+${XORRISO} -as mkisofs \
     -iso-level 3 \
     -r \
     -J --joliet-long \
@@ -390,7 +399,8 @@ xorriso -as mkisofs \
     -o "${OUTPUT_ISO}" \
     "${ISO_ROOT}"
 
-implantisomd5 "${OUTPUT_ISO}" 2>/dev/null || true
+# shellcheck disable=SC2086
+${IMPLANTISOMD5} "${OUTPUT_ISO}" 2>/dev/null || true
 
 # ── Verify protective MBR + GPT layout ───────────────────────────────────────
 # Expected: "System area summary: MBR protective-msdos-label cyl-align-off GPT"
@@ -398,9 +408,11 @@ implantisomd5 "${OUTPUT_ISO}" 2>/dev/null || true
 # "dos" means a hybrid MBR was created instead of a protective one — old
 # firmware will not see the GPT and may not discover the USB as bootable.
 echo ">>> Partition layout:"
-xorriso -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
+# shellcheck disable=SC2086
+${XORRISO} -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
     grep -E '^(System area|ISO image size|MBR|GPT|Partition)' || true
-xorriso -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
+# shellcheck disable=SC2086
+${XORRISO} -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
     grep 'System area summary' | grep -q 'protective' && \
     echo ">>> Protective MBR + GPT: OK" || \
     echo ">>> WARNING: protective MBR not found — USB may not boot on older firmware"
