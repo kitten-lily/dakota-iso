@@ -89,20 +89,32 @@ echo "=== Building offline OCI store (composefs=${COMPOSEFS_BACKEND}) for ${PAYL
 # iso-tools container (see live/iso-tools/Containerfile); the whole
 # from→copy→commit sequence runs in one `podman run` so the buildah working
 # container survives across commands. Otherwise it runs on the host.
-export PAYLOAD_IMAGE PAYLOAD_OCI OUTPUT_DIR COMPOSEFS_BACKEND
+#
+# Export the payload to an oci-archive on the host first, so payload-prep reads
+# from a file under OUTPUT_DIR rather than the host containers-storage. This
+# avoids bind-mounting /var/lib/containers/storage into the tools container —
+# that path is wrong for rootless podman (storage lives under $HOME) and even
+# when mounted the nested userns can't take the storage lock. The oci-archive
+# transport works identically rootless and rootful.
+PAYLOAD_INPUT="${OUTPUT_DIR}/${TARGET}-payload-input.oci.tar"
+trap "rm -f '${SQUASHFS}' '${BOOT_TAR}' '${PAYLOAD_OCI}' '${PAYLOAD_INPUT}' 2>/dev/null || true" EXIT
+echo "=== Exporting ${PAYLOAD_IMAGE} to oci-archive for payload prep ==="
+podman save --format oci-archive -o "${PAYLOAD_INPUT}" "${PAYLOAD_IMAGE}"
+podman rmi "${PAYLOAD_IMAGE}" || true
+
+export PAYLOAD_IMAGE PAYLOAD_INPUT PAYLOAD_OCI OUTPUT_DIR COMPOSEFS_BACKEND
 if [[ -n "${ISO_TOOLS_IMAGE:-}" ]]; then
     echo "Running payload prep in iso-tools container: ${ISO_TOOLS_IMAGE}"
     podman run --rm --privileged --net=host \
-        -v /var/lib/containers/storage:/var/lib/containers/storage \
         -v "${OUTPUT_DIR}:${OUTPUT_DIR}" \
         -v "${REPO_ROOT}/live/iso-tools/payload-prep.sh:/payload-prep.sh:ro" \
-        -e PAYLOAD_IMAGE -e PAYLOAD_OCI -e OUTPUT_DIR -e COMPOSEFS_BACKEND \
+        -e PAYLOAD_IMAGE -e PAYLOAD_INPUT -e PAYLOAD_OCI -e OUTPUT_DIR -e COMPOSEFS_BACKEND \
         "${ISO_TOOLS_IMAGE}" bash /payload-prep.sh
 else
     _ns "bash '${REPO_ROOT}/live/iso-tools/payload-prep.sh'"
 fi
 
-podman rmi "${PAYLOAD_IMAGE}" || true
+rm -f "${PAYLOAD_INPUT}"
 
 # ── Squashfs assembly (runs in user namespace for rootless UID mapping) ───────
 #

@@ -10,20 +10,24 @@
 #     `podman run` per command would lose it).
 #
 # All inputs arrive via environment:
-#   PAYLOAD_IMAGE      — image ref to prepare (must exist in local storage)
+#   PAYLOAD_IMAGE      — image ref/tag (names the image inside the oci-archives)
+#   PAYLOAD_INPUT      — input oci-archive of the payload image (exported on the
+#                        host with `podman save`, so this step needs no access
+#                        to the host containers-storage — works rootless+rootful)
 #   PAYLOAD_OCI        — output oci-archive path
 #   OUTPUT_DIR         — scratch dir for the generated config files
 #   COMPOSEFS_BACKEND  — "true" (squash + diffid relabel) or anything else
 set -euo pipefail
 
 : "${PAYLOAD_IMAGE:?PAYLOAD_IMAGE must be set}"
+: "${PAYLOAD_INPUT:?PAYLOAD_INPUT must be set}"
 : "${PAYLOAD_OCI:?PAYLOAD_OCI must be set}"
 : "${OUTPUT_DIR:?OUTPUT_DIR must be set}"
 COMPOSEFS_BACKEND="${COMPOSEFS_BACKEND:-true}"
 
 printf '[install]\nroot-mount-spec = "LABEL=root"\n' > "${OUTPUT_DIR}/.bootc-root-mount.toml"
 
-INJECT_CTR=$(buildah from --pull-never "${PAYLOAD_IMAGE}")
+INJECT_CTR=$(buildah from "oci-archive:${PAYLOAD_INPUT}")
 buildah copy "${INJECT_CTR}" "${OUTPUT_DIR}/.bootc-root-mount.toml" /tmp/.bootc-root-mount.toml
 buildah run "${INJECT_CTR}" -- sh -c 'mkdir -p /usr/lib/bootc/install && cp /tmp/.bootc-root-mount.toml /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'
 
