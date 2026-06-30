@@ -42,6 +42,7 @@ TEST_PLAIN_WORKFLOW = REPO / ".github" / "workflows" / "test-plain-install.yml"
 LIVE_LUKS_UNLOCK = REPO / "live" / "src" / "luks-unlock.py"
 DAKOTA_LUKS_UNLOCK = REPO / "dakota" / "src" / "luks-unlock.py"
 BUILD_LIVE_SQUASHFS = REPO / "scripts" / "build-live-squashfs.sh"
+README = REPO / "README.md"
 
 # Variant directories that must be fully configured.
 KNOWN_VARIANTS = ["dakota", "bluefin", "bluefin-lts-hwe"]
@@ -475,6 +476,56 @@ class TestReleaseSafetyInvariants(unittest.TestCase):
                 f"{workflow.name} must define workflow-level concurrency.",
             )
 
+    def test_build_iso_rotates_and_prunes_dakota_backups(self):
+        """Dakota publisher must maintain exactly 3 backup ISO slots."""
+        content = BUILD_ISO_WORKFLOW.read_text()
+        self.assertIn(
+            "dakota-live-backup-1.iso",
+            content,
+            "build-iso.yml must rotate latest into dakota-live-backup-1.iso before overwrite.",
+        )
+        self.assertIn(
+            "dakota-live-backup-2.iso",
+            content,
+            "build-iso.yml must keep a second backup slot for rollback safety.",
+        )
+        self.assertIn(
+            "dakota-live-backup-3.iso",
+            content,
+            "build-iso.yml must keep a third backup slot for rollback safety.",
+        )
+        self.assertIn(
+            "Delete backup slots beyond 3",
+            content,
+            "build-iso.yml must explicitly prune backup slots older than the most recent 3.",
+        )
+
+    def test_readme_download_table_has_last_three_builds_links(self):
+        """README top download table must expose latest + last 3 dakota backups."""
+        content = README.read_text()
+        top_table_section = content.split("\nBuilds bootable UEFI live ISOs", 1)[0]
+        self.assertIn(
+            "| Variant | Download | Checksum | Size | Published (UTC) | Validation | Last 3 builds |",
+            top_table_section,
+            "README download table header must include a 'Last 3 builds' column.",
+        )
+        dakota_rows = [ln for ln in top_table_section.splitlines() if ln.startswith("| `dakota` |")]
+        self.assertEqual(
+            len(dakota_rows), 1,
+            "README must contain exactly one dakota row in the top download table.",
+        )
+        dakota_row = dakota_rows[0]
+        for backup_name in (
+            "dakota-live-backup-1.iso",
+            "dakota-live-backup-2.iso",
+            "dakota-live-backup-3.iso",
+        ):
+            self.assertIn(
+                backup_name,
+                dakota_row,
+                f"Dakota row must link backup slot {backup_name}.",
+            )
+
     def test_e2e_workflows_wait_for_unit_tests(self):
         """Expensive QEMU E2E jobs should not run after cheap test failures."""
         self.assertIn(
@@ -727,4 +778,3 @@ class TestBuildLiveSquashfs(unittest.TestCase):
                     "Must use '$SOCAT_PREFIX socat' to support root-owned sockets "
                     "when QEMU runs with sudo."
                 )
-

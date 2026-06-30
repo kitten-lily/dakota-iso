@@ -100,6 +100,9 @@ done
 ```
 https://projectbluefin.dev/dakota-live-latest.iso
 https://projectbluefin.dev/dakota-live-latest.iso-CHECKSUM
+https://projectbluefin.dev/dakota-live-backup-1.iso
+https://projectbluefin.dev/dakota-live-backup-2.iso
+https://projectbluefin.dev/dakota-live-backup-3.iso
 ```
 
 Named releases follow the same pattern:
