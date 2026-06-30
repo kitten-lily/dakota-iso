@@ -122,6 +122,31 @@ mkdir -p /usr/lib/bootc/install
 printf '[install]\nroot-mount-spec = "LABEL=root"\n' \
     > /usr/lib/bootc/install/00-defaults.toml
 
+# ── Offline containers-storage for the embedded payload ───────────────────────
+# iso-sd-boot.sh embeds the payload OCI image into the squashfs as a *VFS*
+# containers-storage graphroot at /var/lib/containers/storage (composefs=true
+# path). Podman's default driver is "overlay", so without this config it looks
+# in an empty overlay/ tree and reports the image as missing — the installer
+# then fails until you `podman pull` over the network, defeating the offline ISO.
+#
+# Two things are needed:
+#   driver = "vfs"        — match the embedded store's on-disk layout.
+#   additionalimagestores — fisherman runs rootless as liveuser, whose graphroot
+#                           is ~/.local/share/containers/storage (rootless always
+#                           overrides the system graphroot). Listing the embedded
+#                           store as a read-only additional store makes the image
+#                           resolvable rootless. For a rootful (pkexec) path the
+#                           default graphroot already is /var/lib/containers/storage,
+#                           so this covers both.
+mkdir -p /etc/containers
+cat > /etc/containers/storage.conf << 'STORAGEEOF'
+[storage]
+driver = "vfs"
+
+[storage.options]
+additionalimagestores = ["/var/lib/containers/storage"]
+STORAGEEOF
+
 # ── tuna-installer (bootc-installer flatpak) configuration ────────────────────
 # Krytis embeds the bootc-installer flatpak (org.bootcinstaller.Installer). It
 # reads /etc/bootc-installer/{recipe,images}.json for branding + the offline
