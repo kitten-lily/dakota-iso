@@ -129,19 +129,28 @@ printf '[install]\nroot-mount-spec = "LABEL=root"\n' \
 # in an empty overlay/ tree and reports the image as missing — the installer
 # then fails until you `podman pull` over the network, defeating the offline ISO.
 #
-# Two things are needed:
+# Three things are needed:
 #   driver = "vfs"        — match the embedded store's on-disk layout.
-#   additionalimagestores — fisherman runs rootless as liveuser, whose graphroot
-#                           is ~/.local/share/containers/storage (rootless always
-#                           overrides the system graphroot). Listing the embedded
-#                           store as a read-only additional store makes the image
-#                           resolvable rootless. For a rootful (pkexec) path the
-#                           default graphroot already is /var/lib/containers/storage,
-#                           so this covers both.
-mkdir -p /etc/containers
+#   graphroot (distinct)  — the primary store must NOT sit at the same path as the
+#                           embedded payload. fisherman installs via pkexec (rootful),
+#                           whose default graphroot IS /var/lib/containers/storage.
+#                           containers/storage caches lockfiles by absolute path
+#                           (pkg/lockfile getLockfile): the primary store opens
+#                           .../vfs-layers/layers.lock read-write, then the additional
+#                           store requests the SAME path read-only → cache hit on a
+#                           read-write lock → fatal "lock ... is not a read-only lock".
+#                           Point graphroot at a separate empty dir so the payload is
+#                           only ever the read-only additional store, never the primary.
+#   additionalimagestores — makes the embedded payload resolvable. Rootless (liveuser)
+#                           forces graphroot to ~/.local/share/containers/storage, so
+#                           the system-path store is only reachable as an additional
+#                           read-only store; the distinct graphroot above keeps the
+#                           rootful path from colliding with it. Covers both identities.
+mkdir -p /etc/containers /var/lib/containers/storage-live
 cat > /etc/containers/storage.conf << 'STORAGEEOF'
 [storage]
 driver = "vfs"
+graphroot = "/var/lib/containers/storage-live"
 
 [storage.options]
 additionalimagestores = ["/var/lib/containers/storage"]
