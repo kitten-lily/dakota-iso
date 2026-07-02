@@ -64,6 +64,31 @@ fi
 echo 'liveuser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/liveuser
 chmod 0440 /etc/sudoers.d/liveuser
 
+# ── niri: suppress hotkey-overlay popup ────────────────────────────────────────
+# The shipped /etc/niri/config.kdl (files/niri/config.kdl in krytis) leaves
+# hotkey-overlay's skip-at-startup commented out, so installed systems show
+# the "Important Hotkeys" cheat-sheet on first login — expected there. The
+# live ISO is an installer, not a niri intro. niri prefers
+# $XDG_CONFIG_HOME/niri/config.kdl over /etc/niri/config.kdl, so copy the
+# shipped config into liveuser's XDG config and uncomment skip-at-startup,
+# composing with the shipped config instead of replacing it. Installed
+# systems are untouched — this only lands under liveuser's home in the live
+# overlay.
+mkdir -p /home/liveuser/.config/niri
+sed 's/^    \/\/ skip-at-startup$/    skip-at-startup/' \
+    /etc/niri/config.kdl > /home/liveuser/.config/niri/config.kdl
+chown -R liveuser:liveuser /home/liveuser/.config
+
+# ── noctalia: skip first-run welcome popup ──────────────────────────────────────
+# noctalia-shell gates its welcome/onboarding popup on the existence of
+# ~/.local/state/noctalia/.setup-complete. Pre-seed it for liveuser so the
+# live session boots straight to a clean desktop instead of the onboarding
+# flow, mirroring how gnome-initial-setup-done is pre-seeded below for GNOME
+# live images. Installed systems keep default first-run behaviour.
+mkdir -p /home/liveuser/.local/state/noctalia
+touch /home/liveuser/.local/state/noctalia/.setup-complete
+chown -R liveuser:liveuser /home/liveuser/.local
+
 # ── Passwordless polkit for the live user ─────────────────────────────────────
 # The bootc-installer flatpak needs polkit authorization to run `bootc install`.
 # GNOME provides a polkit GUI agent via gnome-shell; niri ships none, so polkit
