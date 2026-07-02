@@ -28,7 +28,8 @@ Only `/tmp/initramfs.img` crosses the stage boundary.
 
 **What `configure-live.sh` does in the final stage:**
 - Sets `VERSION_ID=latest` in `os-release` (GNOME OS omits it)
-- Creates `liveuser` (uid 1000, passwordless)
+- Temporarily bind-mounts `/var/home` onto `/home` when it is safe to do so (avoids binding or unmounting when `/home` already resolves to `/var/home` or is an existing mountpoint), then creates `liveuser`
+  (uid 1000, passwordless) so the home directory lands in the runtime-visible tree
 - Configures GDM autologin for `liveuser`
 - Installs and configures `org.bootcinstaller.Installer` Flatpak
 - Sets up `live-ready.service` (writes `DAKOTA_LIVE_READY` to serial when GDM starts)

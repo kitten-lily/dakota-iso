@@ -18,6 +18,23 @@ set -exo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+cleanup_liveuser_home_bind() {
+    if [[ "${LIVEUSER_HOME_BIND_ACTIVE:-0}" == "1" ]]; then
+        # Only attempt to umount if /home is a mountpoint to avoid unmounting a
+        # real directory or following symlinks when /home -> /var/home.
+        if command -v mountpoint >/dev/null 2>&1; then
+            if mountpoint -q /home; then
+                umount /home || true
+            fi
+        else
+            if grep -qs ' /home ' /proc/mounts; then
+                umount /home || true
+            fi
+        fi
+        LIVEUSER_HOME_BIND_ACTIVE=0
+    fi
+}
+
 # ── VERSION_ID ────────────────────────────────────────────────────────────────
 # GNOME OS omits VERSION_ID from os-release; image-builder and bootc tooling
 # require it.  Replace if present, append if missing.
@@ -28,6 +45,34 @@ else
 fi
 
 # ── Live user ─────────────────────────────────────────────────────────────────
+# GNOME OS binds /home to /var/home at runtime. Mirror that layout while
+# creating the live user so its home stays visible after first boot.
+mkdir -p /var/home
+# Create /home if it doesn't exist, but don't follow or overwrite an existing
+# symlink (e.g. /home -> /var/home on some hosts). If /home is a symlink to
+# /var/home we must not bind-mount onto the same target.
+if [[ ! -e /home ]]; then
+    mkdir -p /home
+fi
+
+LIVEUSER_HOME_BIND_ACTIVE=0
+trap cleanup_liveuser_home_bind EXIT
+# Only bind-mount if /home is not already the same path as /var/home and it's
+# not already a mountpoint. Use readlink -f to compare canonical paths.
+if [ "$(readlink -f /home)" != "$(readlink -f /var/home)" ]; then
+    if command -v mountpoint >/dev/null 2>&1; then
+        if ! mountpoint -q /home; then
+            mount --bind /var/home /home
+            LIVEUSER_HOME_BIND_ACTIVE=1
+        fi
+    else
+        if ! grep -qs ' /home ' /proc/mounts; then
+            mount --bind /var/home /home
+            LIVEUSER_HOME_BIND_ACTIVE=1
+        fi
+    fi
+fi
+
 # GNOME OS has no livesys-scripts; create a passwordless live user manually.
 useradd --create-home --uid 1000 --user-group \
     --comment "Live User" liveuser || true
@@ -111,6 +156,14 @@ chmod 0440 /etc/sudoers.d/liveuser
 mkdir -p /home/liveuser/.config
 touch /home/liveuser/.config/gnome-initial-setup-done
 chown -R liveuser:liveuser /home/liveuser/.config
+if command -v restorecon >/dev/null 2>&1; then
+    # If restorecon is available, run it to ensure SELinux contexts inside the
+    # image are correct. Do not gate on selinuxenabled — image builds may run on
+    # non-SELinux hosts but still need files inside the image relabelled.
+    restorecon -RF /var/home/liveuser || true
+fi
+cleanup_liveuser_home_bind
+trap - EXIT
 
 # Remove gnome-tour desktop file so GNOME Shell can never launch it on the
 # live ISO regardless of dconf state.  This is belt-and-suspenders alongside

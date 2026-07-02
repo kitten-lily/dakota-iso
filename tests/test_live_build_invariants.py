@@ -361,6 +361,77 @@ class TestConfigureLiveSyntax(unittest.TestCase):
             "Use /usr/share/applications/ instead.",
         )
 
+    def test_configure_live_binds_var_home_while_creating_liveuser(self):
+        """configure-live.sh must create liveuser in the runtime-visible home tree.
+
+        The bind/unmount logic must be guarded to avoid unmounting a real
+        directory or following symlinks when `/home` already resolves to
+        `/var/home` or is already a mountpoint.
+        """
+        content = CONFIGURE_LIVE.read_text()
+        bind_marker = "mount --bind /var/home /home"
+        user_marker = "useradd --create-home --uid 1000 --user-group"
+
+        # Ensure the EXIT trap exists so the bind is cleaned up on early exit.
+        self.assertIn(
+            "trap cleanup_liveuser_home_bind EXIT",
+            content,
+            "configure-live.sh must install an EXIT trap so /home is unmounted "
+            "if liveuser creation exits early.",
+        )
+
+        # The script must use canonical path comparison to avoid binding when
+        # /home already points to /var/home (symlink case).
+        self.assertIn(
+            "readlink -f /home",
+            content,
+            "configure-live.sh must compare canonical paths (readlink -f) to avoid "
+            "unsafe bind mounts when /home resolves to /var/home.",
+        )
+
+        # The script should check whether /home is already a mountpoint before
+        # attempting to bind, using either mountpoint(1) or /proc/mounts grep.
+        has_mountpoint_check = (
+            "mountpoint -q /home" in content
+            or "grep -qs ' /home ' /proc/mounts" in content
+        )
+        self.assertTrue(
+            has_mountpoint_check,
+            "configure-live.sh must check whether /home is already a mountpoint "
+            "(mountpoint -q /home or grep /proc/mounts) before bind-mounting.",
+        )
+
+        # If a bind is performed, both the mount and its unmount must be present
+        # and the bind must occur before useradd so the created home lands in
+        # the runtime-visible tree.
+        self.assertIn(
+            bind_marker,
+            content,
+            "configure-live.sh must bind /var/home onto /home before creating "
+            "liveuser so the home directory lands in the runtime-visible tree.",
+        )
+        self.assertIn(
+            "umount /home",
+            content,
+            "configure-live.sh must unmount the temporary /home bind mount after "
+            "the liveuser setup block completes.",
+        )
+        self.assertLess(
+            content.index(bind_marker),
+            content.index(user_marker),
+            "configure-live.sh must bind /var/home onto /home before useradd runs.",
+        )
+
+        # Relabeling should be performed when restorecon is available. Do NOT
+        # require SELinux to be enabled on the build host — image builds on
+        # non-SELinux hosts still need relabeling when restorecon exists.
+        self.assertIn(
+            "restorecon -RF /var/home/liveuser",
+            content,
+            "configure-live.sh must relabel /var/home/liveuser when restorecon is "
+            "available so file contexts inside the image are correct (do not gate on selinuxenabled).",
+        )
+
 
 class TestReleaseSafetyInvariants(unittest.TestCase):
     """Release-only security and CI gate invariants."""
