@@ -148,24 +148,24 @@ printf '[install]\nroot-mount-spec = "LABEL=root"\n' \
     > /usr/lib/bootc/install/00-defaults.toml
 
 # ── Offline containers-storage for the embedded payload ───────────────────────
-# iso-sd-boot.sh embeds the payload OCI image into the squashfs as a *VFS*
+# iso-sd-boot.sh embeds the payload OCI image into the squashfs as an *overlay*
 # containers-storage graphroot at /var/lib/containers/storage (composefs=true
-# path). Podman's default driver is "overlay", so without this config it looks
-# in an empty overlay/ tree and reports the image as missing — the installer
-# then fails until you `podman pull` over the network, defeating the offline ISO.
+# path) — matching podman's own default driver, so this config exists only to
+# register it as an additional store and to avoid a graphroot collision (see
+# below), not to force a non-default driver.
 #
-# Three things are needed:
-#   driver = "vfs"        — match the embedded store's on-disk layout.
+# Two things are needed:
 #   graphroot (distinct)  — the primary store must NOT sit at the same path as the
 #                           embedded payload. fisherman installs via pkexec (rootful),
 #                           whose default graphroot IS /var/lib/containers/storage.
 #                           containers/storage caches lockfiles by absolute path
 #                           (pkg/lockfile getLockfile): the primary store opens
-#                           .../vfs-layers/layers.lock read-write, then the additional
-#                           store requests the SAME path read-only → cache hit on a
+#                           its layers.lock read-write, then the additional store
+#                           requests the SAME path read-only → cache hit on a
 #                           read-write lock → fatal "lock ... is not a read-only lock".
 #                           Point graphroot at a separate empty dir so the payload is
 #                           only ever the read-only additional store, never the primary.
+#                           This applies regardless of storage driver.
 #   additionalimagestores — makes the embedded payload resolvable. Rootless (liveuser)
 #                           forces graphroot to ~/.local/share/containers/storage, so
 #                           the system-path store is only reachable as an additional
@@ -174,7 +174,7 @@ printf '[install]\nroot-mount-spec = "LABEL=root"\n' \
 mkdir -p /etc/containers /var/lib/containers/storage-live
 cat > /etc/containers/storage.conf << 'STORAGEEOF'
 [storage]
-driver = "vfs"
+driver = "overlay"
 graphroot = "/var/lib/containers/storage-live"
 
 [storage.options]

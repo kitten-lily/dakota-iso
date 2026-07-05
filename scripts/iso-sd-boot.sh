@@ -158,11 +158,17 @@ _ns_build_squashfs() {
     [[ "${WORKDIR}" != "${OUTPUT_DIR}" ]] && df -h "${WORKDIR}"
 
     if [[ "${COMPOSEFS_BACKEND}" == "true" ]]; then
+        # Overlay, not vfs: /vfs-storage is a plain bind-mounted dir on the host
+        # WORKDIR filesystem (recommend xfs/ext4/btrfs — see the findmnt hint
+        # above), not the container's own overlayfs rootfs, and this container
+        # already runs --privileged. Neither of the constraints that force vfs
+        # in payload-prep.sh (rootless build, overlay-on-overlayfs) applies
+        # here — see docs/skills/mise.md in krytis for the full writeup.
         SQUASHFS_STORAGE="${CS_STAGING}/var/lib/containers/storage"
         STORAGE_CONF=$(mktemp "${OUTPUT_DIR}/live-storage-XXXXXX.conf")
         mkdir -p "${SQUASHFS_STORAGE}"
-        printf '[storage]\ndriver = "vfs"\nrunroot = "/tmp/cs-runroot"\ngraphroot = "/vfs-storage"\n' > "${STORAGE_CONF}"
-        echo 'Importing OCI image into squashfs VFS containers-storage...'
+        printf '[storage]\ndriver = "overlay"\nrunroot = "/tmp/cs-runroot"\ngraphroot = "/vfs-storage"\n' > "${STORAGE_CONF}"
+        echo 'Importing OCI image into squashfs overlay containers-storage...'
         podman run --rm \
             --privileged \
             -v "${PAYLOAD_OCI}:/payload.oci.tar:ro" \
@@ -212,8 +218,13 @@ _ns_build_squashfs() {
 
     if [[ "${COMPOSEFS_BACKEND}" == "true" ]]; then
         mkdir -p "${SQUASHFS_ROOT}/var/lib/containers/storage"
-        echo "Copying VFS store into squashfs root..."
-        cp -a "${CS_STAGING}/var/lib/containers/storage/." "${SQUASHFS_ROOT}/var/lib/containers/storage/"
+        echo "Copying overlay store into squashfs root..."
+        # Overlay containers-storage contains character-device whiteout files that
+        # cp -a cannot create without privileges.  Use rsync to skip them — they
+        # are write-layer artifacts not needed in the read-only additional store
+        # (payload-prep.sh already squashes to a single layer, so there is
+        # nothing for a whiteout to mark deleted in the first place).
+        rsync -a --no-specials --no-devices "${CS_STAGING}/var/lib/containers/storage/" "${SQUASHFS_ROOT}/var/lib/containers/storage/"
     else
         mkdir -p "${SQUASHFS_ROOT}/usr/lib/containers/storage"
         echo "Copying overlay store into squashfs root..."
