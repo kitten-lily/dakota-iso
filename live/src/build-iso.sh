@@ -47,18 +47,28 @@ set -euo pipefail
 
 STORE_SFS=""
 ARCH_SPECS=()
+LABEL=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --store) STORE_SFS="${2:?--store requires a path}"; shift 2 ;;
         --arch)  ARCH_SPECS+=("${2:?--arch requires arch:boot-tar:squashfs}"); shift 2 ;;
         --title) LIVE_TITLE="${2:?--title requires a string}"; shift 2 ;;
+        --label) LABEL="${2:?--label requires a string}"; shift 2 ;;
         *)       break ;;
     esac
 done
 
 LIVE_TITLE="${LIVE_TITLE:-Dakota Live}"
-LABEL="DAKOTA_LIVE"
+LABEL="${LABEL:-DAKOTA_LIVE}"
 MULTI_ARCH=false
+
+# xorriso and implantisomd5 have no freedesktop-sdk component, so on immutable
+# hosts (e.g. Krytis) they are routed through the iso-tools container. Override
+# with a `podman run ... xorriso` command via the XORRISO env var; defaults to
+# the host binary for dakota/bluefin CI. The rest of the ESP toolchain (mtools,
+# dosfstools, truncate, tar) runs on the host either way.
+XORRISO="${XORRISO:-xorriso}"
+IMPLANTISOMD5="${IMPLANTISOMD5:-implantisomd5}"
 
 if [[ ${#ARCH_SPECS[@]} -gt 0 ]]; then
     # Multi-arch mode: remaining arg is output ISO
@@ -180,7 +190,7 @@ if [[ "${MULTI_ARCH}" == "true" ]]; then
 title   ${LIVE_TITLE} (${arch})
 linux   /images/pxeboot/${arch}/vmlinuz
 initrd  /images/pxeboot/${arch}/initrd.img
-options root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8
+options root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8 console=tty0 rd.shell rd.info loglevel=7
 EOF
 
         # Per-arch squashfs
@@ -214,7 +224,7 @@ EOF
             local_console="${SERIAL_CONSOLE[${arch}]:-ttyS0}"
             cat << EOF
 menuentry "${LIVE_TITLE} (${arch})" {
-    linux /images/pxeboot/${arch}/vmlinuz root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8 rd.dakota.isofile=\${iso_path}
+    linux /images/pxeboot/${arch}/vmlinuz root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 rd.live.squashimg=squashfs-${arch}.img enforcing=0 nvidia-drm.modeset=1 console=${local_console},115200n8 console=tty0 rd.shell rd.info loglevel=7 rd.dakota.isofile=\${iso_path}
     initrd /images/pxeboot/${arch}/initrd.img
 }
 EOF
@@ -283,7 +293,7 @@ EOF
 title   ${LIVE_TITLE}
 linux   /images/pxeboot/vmlinuz
 initrd  /images/pxeboot/initrd.img
-options root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8
+options root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8 console=tty0 rd.shell rd.info loglevel=7
 EOF
 
     # EFI fallback path on the ISO9660 root
@@ -297,7 +307,7 @@ EOF
     cp "${INITRD}"  "${ISO_ROOT}/images/pxeboot/initrd.img"
     cat > "${ISO_ROOT}/boot/grub/loopback.cfg" << EOF
 menuentry "${LIVE_TITLE}" {
-    linux /images/pxeboot/vmlinuz root=live:LABEL=DAKOTA_LIVE rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8 rd.dakota.isofile=\${iso_path}
+    linux /images/pxeboot/vmlinuz root=live:LABEL=${LABEL} rd.live.image rd.live.overlay.overlayfs=1 enforcing=0 nvidia-drm.modeset=1 console=ttyS0,115200n8 console=ttyAMA0,115200n8 console=tty0 rd.shell rd.info loglevel=7 rd.dakota.isofile=\${iso_path}
     initrd /images/pxeboot/initrd.img
 }
 EOF
@@ -377,7 +387,8 @@ echo ">>> Assembling ISO..."
 #   Old UEFI firmware sees a "dos" disk, skips GPT, finds no EFI entries in the
 #   MBR partition table, and does not show the USB in the boot menu.
 #   (See issues #15, https://github.com/projectbluefin/dakota-iso/issues/15)
-xorriso -as mkisofs \
+# shellcheck disable=SC2086  # XORRISO may be a multi-word `podman run ...` command
+${XORRISO} -as mkisofs \
     -iso-level 3 \
     -r \
     -J --joliet-long \
@@ -388,7 +399,8 @@ xorriso -as mkisofs \
     -o "${OUTPUT_ISO}" \
     "${ISO_ROOT}"
 
-implantisomd5 "${OUTPUT_ISO}" 2>/dev/null || true
+# shellcheck disable=SC2086
+${IMPLANTISOMD5} "${OUTPUT_ISO}" 2>/dev/null || true
 
 # ── Verify protective MBR + GPT layout ───────────────────────────────────────
 # Expected: "System area summary: MBR protective-msdos-label cyl-align-off GPT"
@@ -396,9 +408,11 @@ implantisomd5 "${OUTPUT_ISO}" 2>/dev/null || true
 # "dos" means a hybrid MBR was created instead of a protective one — old
 # firmware will not see the GPT and may not discover the USB as bootable.
 echo ">>> Partition layout:"
-xorriso -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
+# shellcheck disable=SC2086
+${XORRISO} -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
     grep -E '^(System area|ISO image size|MBR|GPT|Partition)' || true
-xorriso -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
+# shellcheck disable=SC2086
+${XORRISO} -indev "${OUTPUT_ISO}" -report_system_area plain 2>/dev/null | \
     grep 'System area summary' | grep -q 'protective' && \
     echo ">>> Protective MBR + GPT: OK" || \
     echo ">>> WARNING: protective MBR not found — USB may not boot on older firmware"

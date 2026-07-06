@@ -159,7 +159,16 @@ ARG CACHE_BUST=0
 COPY src/flatpaks /tmp/flatpaks-list
 RUN --mount=type=bind,source=src,target=/src \
     --mount=type=cache,target=/var/cache/flatpak-dl,id=dakota-flatpak-${TARGET} \
-    /src/install-flatpaks.sh
+    bash -c 'if command -v flatpak >/dev/null 2>&1; then /src/install-flatpaks.sh; else echo "Skipping flatpaks — flatpak not present on ${TARGET}"; fi'
 
 COPY src/ /tmp/src/
-RUN chmod +x /tmp/src/configure-live.sh && /tmp/src/configure-live.sh
+# Dispatch to a target-specific configure script when one exists
+# (e.g. configure-live-krytis.sh for TARGET=krytis), falling back to
+# the default configure-live.sh for dakota/bluefin variants.
+RUN set -e; \
+    CONFIGURE_SCRIPT="/tmp/src/configure-live-${TARGET}.sh"; \
+    if [ -f "${CONFIGURE_SCRIPT}" ]; then \
+        chmod +x "${CONFIGURE_SCRIPT}" && "${CONFIGURE_SCRIPT}"; \
+    else \
+        chmod +x /tmp/src/configure-live.sh && /tmp/src/configure-live.sh; \
+    fi

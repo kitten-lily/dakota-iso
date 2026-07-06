@@ -79,43 +79,48 @@ df -h "${OUTPUT_DIR}"
 [[ "${WORKDIR}" != "${OUTPUT_DIR}" ]] && df -h "${WORKDIR}"
 echo "Building squashfs and boot tar from localhost/${TARGET}-installer..."
 
-printf '[install]\nroot-mount-spec = "LABEL=root"\n' > "${OUTPUT_DIR}/.bootc-root-mount.toml"
-
 LIVE_TARGET=$(cat "${TARGET}/live_target" 2>/dev/null | tr -d '[:space:]' || echo "${TARGET}")
 BOOTLOADER_VARIANT=$(echo "${LIVE_TARGET}" | sed 's/-nvidia-open$//;s/-nvidia$//')
 COMPOSEFS_BACKEND=$(cat "live/src/${BOOTLOADER_VARIANT}/composefs" 2>/dev/null | tr -d '[:space:]' || echo "true")
 echo "=== Building offline OCI store (composefs=${COMPOSEFS_BACKEND}) for ${PAYLOAD_IMAGE} ==="
 
-INJECT_CTR=$(_ns "buildah from --pull-never '${PAYLOAD_IMAGE}'")
-_ns "buildah copy '${INJECT_CTR}' '${OUTPUT_DIR}/.bootc-root-mount.toml' /tmp/.bootc-root-mount.toml"
-_ns "buildah run '${INJECT_CTR}' -- sh -c 'mkdir -p /usr/lib/bootc/install && cp /tmp/.bootc-root-mount.toml /usr/lib/bootc/install/00-defaults.toml && rm /tmp/.bootc-root-mount.toml'"
+# Payload prep needs buildah + skopeo + python3. On hosts without buildah
+# (e.g. immutable Krytis) set ISO_TOOLS_IMAGE to run the step inside the
+# iso-tools container (see live/iso-tools/Containerfile); the whole
+# from→copy→commit sequence runs in one `podman run` so the buildah working
+# container survives across commands. Otherwise it runs on the host.
+#
+# Export the payload to an oci-archive on the host first, so payload-prep reads
+# from a file under OUTPUT_DIR rather than the host containers-storage. This
+# avoids bind-mounting /var/lib/containers/storage into the tools container —
+# that path is wrong for rootless podman (storage lives under $HOME) and even
+# when mounted the nested userns can't take the storage lock. The oci-archive
+# transport works identically rootless and rootful.
+PAYLOAD_INPUT="${OUTPUT_DIR}/${TARGET}-payload-input.oci.tar"
+trap "rm -f '${SQUASHFS}' '${BOOT_TAR}' '${PAYLOAD_OCI}' '${PAYLOAD_INPUT}' 2>/dev/null || true" EXIT
+echo "=== Exporting ${PAYLOAD_IMAGE} to oci-archive for payload prep ==="
+podman save --format oci-archive -o "${PAYLOAD_INPUT}" "${PAYLOAD_IMAGE}"
+podman rmi "${PAYLOAD_IMAGE}" || true
 
-if [[ "${COMPOSEFS_BACKEND}" == "true" ]]; then
-    printf '[storage]\ndriver = "vfs"\nrunroot = "/run/containers/storage"\ngraphroot = "/var/lib/containers/storage"\n' > "${OUTPUT_DIR}/.vfs-storage.conf"
-    _ns "buildah run '${INJECT_CTR}' -- mkdir -p /etc/containers"
-    _ns "buildah copy '${INJECT_CTR}' '${OUTPUT_DIR}/.vfs-storage.conf' /etc/containers/storage.conf"
-    echo "=== Squashing ${PAYLOAD_IMAGE} to single layer (avoids VFS explosion) ==="
-    _ns "buildah commit --squash '${INJECT_CTR}' 'oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}'"
-    _ns "buildah rm '${INJECT_CTR}'"
-    ANNOT_CTR=$(_ns "buildah from --pull-never 'oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}'")
-    SQUASHED_DIFFID=$(_ns "skopeo inspect --config 'oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}' 2>/dev/null" | \
-        python3 -c 'import json,sys; c=json.load(sys.stdin); print(c["rootfs"]["diff_ids"][0])' 2>/dev/null || true)
-    if [[ -n "${SQUASHED_DIFFID}" ]]; then
-        echo "Updating ostree.final-diffid to ${SQUASHED_DIFFID} (composefs mode)"
-        _ns "buildah config --label 'ostree.final-diffid=${SQUASHED_DIFFID}' '${ANNOT_CTR}'"
-        _ns "buildah config --annotation 'ostree.final-diffid=${SQUASHED_DIFFID}' '${ANNOT_CTR}'"
-    fi
-    _ns "buildah commit --squash '${ANNOT_CTR}' 'oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}'"
-    _ns "buildah rm '${ANNOT_CTR}'"
+export PAYLOAD_IMAGE PAYLOAD_INPUT PAYLOAD_OCI OUTPUT_DIR COMPOSEFS_BACKEND
+if [[ -n "${ISO_TOOLS_IMAGE:-}" ]]; then
+    echo "Running payload prep in iso-tools container: ${ISO_TOOLS_IMAGE}"
+    # STORAGE_DRIVER=vfs: buildah's internal storage lives on the container's
+    # overlayfs rootfs. Its default overlay driver cannot stack on overlayfs
+    # without fuse-overlayfs ("'overlay' is not supported over overlayfs"); vfs
+    # has no such constraint. Scoped to the container path — the host path uses
+    # whatever the host buildah is configured for (overlay on rootful CI).
+    podman run --rm --privileged --net=host \
+        -v "${OUTPUT_DIR}:${OUTPUT_DIR}" \
+        -v "${REPO_ROOT}/live/iso-tools/payload-prep.sh:/payload-prep.sh:ro" \
+        -e PAYLOAD_IMAGE -e PAYLOAD_INPUT -e PAYLOAD_OCI -e OUTPUT_DIR -e COMPOSEFS_BACKEND \
+        -e STORAGE_DRIVER=vfs \
+        "${ISO_TOOLS_IMAGE}" bash /payload-prep.sh
 else
-    # Non-composefs (bootcDirect): no squash to preserve ostree commits.
-    # Save the injected container image as an oci-archive for overlay import.
-    echo "=== Committing ${PAYLOAD_IMAGE} WITHOUT squash to preserve ostree commits ==="
-    _ns "buildah commit '${INJECT_CTR}' 'oci-archive:${PAYLOAD_OCI}:${PAYLOAD_IMAGE}'"
-    _ns "buildah rm '${INJECT_CTR}'"
+    _ns "bash '${REPO_ROOT}/live/iso-tools/payload-prep.sh'"
 fi
 
-podman rmi "${PAYLOAD_IMAGE}" || true
+rm -f "${PAYLOAD_INPUT}"
 
 # ── Squashfs assembly (runs in user namespace for rootless UID mapping) ───────
 #
@@ -249,10 +254,26 @@ df -h "${OUTPUT_DIR}"
 du -sh "${SQUASHFS}" "${BOOT_TAR}" 2>/dev/null || true
 
 LIVE_TITLE=$(cat "${TARGET}/live_title" 2>/dev/null || echo 'Dakota Live')
+LIVE_LABEL=$(cat "${TARGET}/live_label" 2>/dev/null | tr -d '[:space:]' || echo 'DAKOTA_LIVE')
+
+# xorriso/implantisomd5 have no freedesktop-sdk component. When ISO_TOOLS_IMAGE
+# is set (immutable host), route just those two binaries through the container;
+# mtools/dosfstools/truncate/tar still run on the host. OUTPUT_DIR is mounted at
+# the same path so the WORK tmpdir (TMPDIR=OUTPUT_DIR) and OUTPUT_ISO resolve.
+XORRISO="xorriso"
+IMPLANTISOMD5="implantisomd5"
+if [[ -n "${ISO_TOOLS_IMAGE:-}" ]]; then
+    XORRISO="podman run --rm -v ${OUTPUT_DIR}:${OUTPUT_DIR} -w ${OUTPUT_DIR} ${ISO_TOOLS_IMAGE} xorriso"
+    IMPLANTISOMD5="podman run --rm -v ${OUTPUT_DIR}:${OUTPUT_DIR} -w ${OUTPUT_DIR} ${ISO_TOOLS_IMAGE} implantisomd5"
+fi
+
 TMPDIR="${OUTPUT_DIR}" \
+XORRISO="${XORRISO}" \
+IMPLANTISOMD5="${IMPLANTISOMD5}" \
 PATH="/usr/sbin:/usr/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}" \
     bash "live/src/build-iso.sh" \
         --title "${LIVE_TITLE}" \
+        --label "${LIVE_LABEL}" \
         "${BOOT_TAR}" "${SQUASHFS}" "${OUTPUT_DIR}/${TARGET}-live.iso"
 
 echo "ISO ready: ${OUTPUT_DIR}/${TARGET}-live.iso"

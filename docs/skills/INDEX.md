@@ -13,6 +13,7 @@ When a session surfaces a new pattern or workaround, add it to the relevant file
 | [`e2e-ci.md`](e2e-ci.md) | Plain install E2E gate — debug ISO, ENOSPC root cause, QEMU disk, step structure | Working on the E2E test or diagnosing CI failures |
 | [`skill-drift.md`](skill-drift.md) | How the skill-drift CI check works, path mapping, waiver process | Skill-drift check failing on a PR, or deciding if a change needs a doc update |
 | [`install-failures.md`](install-failures.md) | Root causes for ISO install failures: ENOSPC, emergency shell, missing bootloader | ISO boots but install fails or installed system doesn't boot |
+| [`krytis-live-config.md`](krytis-live-config.md) | Live-only overrides for krytis's niri/noctalia session (hotkey overlay, first-run popups) | Editing `configure-live-krytis.sh` to suppress a desktop UI element for `liveuser` |
 
 ## Org-level skills
 

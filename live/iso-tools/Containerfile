@@ -1,0 +1,27 @@
+# iso-tools — build-time toolchain container for the iso-sd-boot pipeline.
+#
+# Carries the host-side ISO assembly tools that have no freedesktop-sdk
+# component, so an immutable host (e.g. Krytis) can run the build with only
+# podman present. Used when ISO_TOOLS_IMAGE is exported for iso-sd-boot.sh:
+#
+#   podman build -t localhost/iso-tools live/iso-tools
+#   ISO_TOOLS_IMAGE=localhost/iso-tools bash scripts/iso-sd-boot.sh
+#
+# buildah + xorriso are the tools that drive this container; the rest ride
+# along so the payload-prep and ISO-assembly steps are fully self-contained.
+FROM registry.fedoraproject.org/fedora-minimal:latest
+
+RUN microdnf install -y --setopt=install_weak_deps=False \
+        buildah \
+        skopeo \
+        xorriso \
+        mtools \
+        dosfstools \
+        squashfs-tools \
+        isomd5sum \
+        python3 \
+        tar \
+    && microdnf clean all
+
+# buildah inside the container writes to the host containers-storage mounted
+# at /var/lib/containers/storage; the default overlay graphroot matches.
