@@ -64,21 +64,6 @@ fi
 echo 'liveuser ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/liveuser
 chmod 0440 /etc/sudoers.d/liveuser
 
-# ── niri: suppress hotkey-overlay popup ────────────────────────────────────────
-# The shipped /etc/niri/config.kdl (files/niri/config.kdl in krytis) leaves
-# hotkey-overlay's skip-at-startup commented out, so installed systems show
-# the "Important Hotkeys" cheat-sheet on first login — expected there. The
-# live ISO is an installer, not a niri intro. niri prefers
-# $XDG_CONFIG_HOME/niri/config.kdl over /etc/niri/config.kdl, so copy the
-# shipped config into liveuser's XDG config and uncomment skip-at-startup,
-# composing with the shipped config instead of replacing it. Installed
-# systems are untouched — this only lands under liveuser's home in the live
-# overlay.
-mkdir -p /home/liveuser/.config/niri
-sed 's/^    \/\/ skip-at-startup$/    skip-at-startup/' \
-    /etc/niri/config.kdl > /home/liveuser/.config/niri/config.kdl
-chown -R liveuser:liveuser /home/liveuser/.config
-
 # ── noctalia: skip first-run welcome popup ──────────────────────────────────────
 # noctalia-shell gates its welcome/onboarding popup on the existence of
 # ~/.local/state/noctalia/.setup-complete. Pre-seed it for liveuser so the
@@ -194,10 +179,10 @@ INSTALLER_APP_ID="org.bootcinstaller.Installer"
 KRYTIS_IMGREF="ghcr.io/starlit-os/krytis:latest"
 
 mkdir -p /etc/bootc-installer /usr/share/bootc-installer/images
-# Reuse the shared tour image so recipe.json's tour slides resolve.
-[[ -f "$SCRIPT_DIR/images/dakotaraptor.png" ]] && \
-    install -Dm644 "$SCRIPT_DIR/images/dakotaraptor.png" \
-        /usr/share/bootc-installer/images/dakotaraptor.png
+# Krytis-specific tour image so recipe.json's tour slides resolve.
+[[ -f "$SCRIPT_DIR/krytis/images/krytis-logo.png" ]] && \
+    install -Dm644 "$SCRIPT_DIR/krytis/images/krytis-logo.png" \
+        /usr/share/bootc-installer/images/krytis-logo.png
 
 # images.json: single Krytis entry.
 cat > /etc/bootc-installer/images.json << IMGEOF
@@ -235,6 +220,36 @@ recipe["local_imgref"] = "containers-storage:${KRYTIS_IMGREF}"
 recipe["bootloader"] = "systemd"
 recipe["composeFsBackend"] = True
 recipe["filesystem"] = "btrfs"
+# Override the tour block — the shared template ships Bluefin/Dakota-branded
+# copy. Image paths point to krytis-logo.png, installed from
+# live/src/krytis/images/krytis-logo.png.
+recipe["tour"] = {
+    "welcome": {
+        "image": "/run/host/usr/share/bootc-installer/images/krytis-logo.png",
+        "title": "Welcome to StarlitOS Krytis",
+        "description": "An experimental Wayland desktop built from source with BuildStream and bootc. Thanks for trying it out!"
+    },
+    "features": {
+        "image": "/run/host/usr/share/bootc-installer/images/krytis-logo.png",
+        "title": "What's the plan?",
+        "description": "Explore the niri desktop, test apps and workflows, and file issues. We iterate and improve."
+    },
+    "community": {
+        "image": "/run/host/usr/share/bootc-installer/images/krytis-logo.png",
+        "title": "Where are the docs?",
+        "description": "Docs and source at github.com/starlit-os/krytis. Jump in and help shape it."
+    },
+    "developer": {
+        "image": "/run/host/usr/share/bootc-installer/images/krytis-logo.png",
+        "title": "Updates",
+        "description": "Updates come as new OCI images. If something breaks, file an issue."
+    },
+    "completed": {
+        "image": "/run/host/usr/share/bootc-installer/images/krytis-logo.png",
+        "title": "Join the Rebellion",
+        "description": "When this finishes, reboot into Krytis. Welcome to StarlitOS!"
+    }
+}
 with open("/etc/bootc-installer/recipe.json", "w") as f:
     json.dump(recipe, f, indent=2)
     f.write("\n")
